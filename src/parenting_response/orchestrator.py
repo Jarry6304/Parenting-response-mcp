@@ -222,6 +222,9 @@ class Orchestrator:
         else:
             if s["stage"] != "ready":
                 raise PRError(E_INVALID_STATE, f"stage={s['stage']} 不可 finalize")
+            rounds = await self.db.get_rounds(session_id)
+            if not rounds:  # FSM:core_tags → finalize;不取 TAG 不得交稿
+                raise PRError(E_INVALID_STATE, "一般模式須先 ③ core_tags 至少一輪(round 0 起手)")
             if draft is None:
                 raise PRError(E_INVALID_STATE, "一般模式須交 draft(host 草稿過後檢才落庫)")
             violations = self._pattern_check(draft)  # 禁用詞 code 後檢
