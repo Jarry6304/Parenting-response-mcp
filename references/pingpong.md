@@ -63,7 +63,7 @@ converged = C1 ∧ C2 ∧ C3
 C1 本輪 child_reaction = 鬆動配合          —— 必要但絕不充分
 C2 非討好鑑別通過:
    - Satir 輸出 child_stance ≠ 討好  且  analysis 未標記壓抑順從/恐懼驅動訊號
-   - Gottman 若本輪點火:未標記「情緒未消化」
+   - Gottman 若本輪點火:emotion_processed ≠ false（結構化欄位,code 可判）
    - Satir 本輪缺席（呼叫失敗）→ C2 不可判 → converged=false（保守向）
    - R+ 觸發輪（前輪高張力）:Satir 與 Rogers 兩鏡頭皆無討好/恐懼訊號才過
 C3 無新增高張力訊號:
