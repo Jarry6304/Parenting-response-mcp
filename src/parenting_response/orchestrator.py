@@ -206,6 +206,15 @@ class Orchestrator:
             if unknown:
                 raise PRError(E_INVALID_STATE, f"maslow_need 須 ⊆ 缺損四層:{unknown}")
 
+        # G0 複檢(④ 四個自由文本;承「每個入口都是檢查點」)。短路命中不拒收、
+        # 不改走 redflag_stopped——④ 紅旗主體多為家長自陳而非進行中乒乓,鎖案無助益;
+        # 轉介必達 + severity 標記供 L0 追蹤。命中即落 severity,不因後續拒收而無聲。
+        rf = check_shortcircuit(draft, outcome_note, parent_self_note, followup)
+        warnings = check_warning(draft, outcome_note, parent_self_note, followup)
+        if rf is not None or warnings:
+            await self.db.update_session(
+                session_id, {"severity": self._raise(s.get("severity"), "高")})
+
         short = s["stage"] == "short_pending"
         if short:
             if draft is not None:
@@ -217,8 +226,12 @@ class Orchestrator:
                 raise PRError(E_INVALID_STATE, "一般模式須交 draft(host 草稿過後檢才落庫)")
             violations = self._pattern_check(draft)  # 禁用詞 code 後檢
             if violations:
-                return {"rejected": True, "violations": violations,
-                        "hint": "draft 含禁用詞,請重生後重交(不落庫)"}
+                rejected: dict[str, Any] = {"rejected": True, "violations": violations,
+                                            "hint": "draft 含禁用詞,請重生後重交(不落庫)"}
+                if rf is not None:  # G0 訊號不因拒收而丟失
+                    rejected["redflag"] = rf.model_dump()
+                    rejected["referral"] = rf.referral
+                return rejected
 
         record = await self._build_record(s, outcome, draft, claimed_sources, maslow_need,
                                           outcome_note, parent_self_note, followup)
@@ -228,7 +241,13 @@ class Orchestrator:
         )
         if not ok:
             raise PRError(E_INVALID_STATE, "session 已非 open(併發 finalize 恰一成功)")
-        return {"record_id": record["record_id"]}
+        result: dict[str, Any] = {"record_id": record["record_id"]}
+        if rf is not None:
+            result["redflag"] = rf.model_dump()
+            result["referral"] = rf.referral
+        elif warnings:
+            result["warnings"] = warnings
+        return result
 
     # ── 共用守衛 / 終態 ───────────────────────────────────────────
 

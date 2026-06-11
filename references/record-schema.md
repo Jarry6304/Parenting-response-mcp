@@ -26,7 +26,7 @@ v3.0 零 LLM:server 不再產生 per-situation 判讀,records 欄位來源全面
 | `status` / `linked_plan_id` | mode 與 promotion 鏈映射(同 v1,見「mode 與 record.status」) |
 
 - **A3 聚合自 v2 起廢止**(rounds 不再有核心輸出可聚;後文 A3 節僅適用 v1 列)。
-- sessions 推導:`severity` 單調只升不降——① 警訊級命中 → 高;② `emotion_intensity=高` → 中;③ 複檢警訊 → 高(`safety_flag`/`confounders` 軸 v3 不收,該兩條件停用)。`goal_aligned` v3 不再推導(無 `parent_goal` 軸)→ NULL。`is_positive_log` 同 v1。
+- sessions 推導:`severity` 單調只升不降——① 警訊級命中 → 高;② `emotion_intensity=高` → 中;③ 複檢警訊 → 高;④ 自由文本 G0(短路或警訊)→ 高(`safety_flag`/`confounders` 軸 v3 不收,該兩條件停用)。`goal_aligned` v3 不再推導(無 `parent_goal` 軸)→ NULL。`is_positive_log` 同 v1。
 - sessions 新增 `stage`(`constrained|ready|short_pending|finalized|redflag_stopped`),FSM 細分守衛用;`age_band`/`emotion_intensity` 改可 NULL(① 先建 session、② 才補軸)。
 - L1–L4 讀取端:`schema_version=2` 列照本節;`=1` 列照後文 v1 規則。
 

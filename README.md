@@ -11,7 +11,7 @@
 | ① `constraints` | `facts / emotion / mode` | G0 短路紅旗(→ 轉介 113/110 鎖死);回 8 校紅線聯集 ∪ 禁用詞 pattern + Maslow/Satir 探點(引導 S1) |
 | ② `prerequisites` | `age_band / emotion_intensity` | 正向紀錄缺 `script_decision ∈ skip\|generate` → ask-gate 不解鎖;skip → short ④ |
 | ③ `core_tags` | `session_id`(round>0 須 `child_reaction` 六類;round 0 = NULL) | 6 回應核心 TAG(primary/support 依反應確定性映射)+ Erikson/Piaget 查表 + `converged`;每輪複檢 G0,命中自動收案 |
-| ④ `finalize` | `session_id / outcome / draft`(short 模式禁 draft) | 禁用詞 `pattern_check`:過 → `record_id`;違規 → 拒落庫回違規詞 |
+| ④ `finalize` | `session_id / outcome / draft`(short 模式禁 draft) | 自由文本 G0 複檢(短路 → 轉介必達 + severity 高,案照收)+ 禁用詞 `pattern_check`:過 → `record_id`;違規 → 拒落庫回違規詞 |
 
 - 終態 `finalized` / `redflag_stopped` 為吸收態;G0 警訊級不停案但 severity 升「高」(單調只升)。
 - `converged` 為 code 規則(D3):討好式順從 ≠ 收斂——高張力(情緒爆發/退縮害怕)後需連續兩輪鬆動配合。

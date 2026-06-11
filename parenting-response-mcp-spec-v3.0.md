@@ -70,10 +70,11 @@ stateDiagram-v2
 | ① | `constraints`（約束探詢） | `facts / emotion / mode` | G0 短路紅旗;回禁用詞+紅線約束集 + **Maslow/Satir 探點**（引導 S1） | unlock ② | 短路 → `redflag_stopped` |
 | ② | `prerequisites` | `age_band / emotion_intensity / problem_category? / script_decision?` | 驗必填軸;正向紀錄且缺 `script_decision` → 回 ask-gate + 詢問語 | unlock ③（或 skip→short ④） | 缺軸 → `E_MISSING_AXIS` |
 | ③ | `core_tags` | `session_id / child_reaction? / reaction_note?` | 回 **6 回應核心 TAG**（標 primary/support）+ Erikson/Piaget 查表;每輪 reaction 複檢 G0;算 `converged` | unlock ④（可重呼 ×n） | reaction 紅旗 → `redflag_stopped` |
-| ④ | `finalize` | `session_id / draft / outcome / claimed_sources`<br/>（short 模式:無 draft） | 禁用詞 `pattern_check`（short 略過）;落 record | terminal `finalized` | 含禁用詞 → 拒落庫,回違規詞 |
+| ④ | `finalize` | `session_id / draft / outcome / claimed_sources`<br/>（short 模式:無 draft） | **自由文本 G0 複檢**（短路 → 轉介必達 + severity↑,案照收）;禁用詞 `pattern_check`（short 略過）;落 record | terminal `finalized` | 含禁用詞 → 拒落庫,回違規詞 |
 
 - `child_reaction ∈ 鬆動配合 \| 否認堅持 \| 情緒爆發 \| 退縮害怕 \| 反問試探 \| 轉移打岔`;round 0 = NULL。
 - **正向紀錄硬閘:** `problem_category=正向紀錄` 時,② 在收到 `script_decision ∈ skip\|generate` 前**不解鎖任何後續**;skip → short ④（只記事,不產劇本、不 pattern_check）;generate → 一般鏈。`script_decision` 為必填閘(硬),「是否真有問家長」屬 host 配合(軟)。
+- **④ G0(defect-fixes #2):** `draft / outcome_note / parent_self_note / followup` 一律複檢(short 模式同樣適用,short 只略過 pattern_check);短路命中**不拒收、不改走 redflag_stopped**——④ 紅旗主體多為家長自陳而非進行中乒乓,鎖案無助益;回傳附 `redflag`/`referral` 且 severity 升「高」(警訊級 → 附 `warnings` + severity 升「高」;G0 訊號不因 pattern 拒收而丟失)。
 - 違序呼叫明確錯誤,**零 server 成本**。
 
 ## 學派 TAG 設計（Approach 1,locked;詳見 `references/cores/tags.md`）
@@ -112,7 +113,7 @@ stateDiagram-v2
 
 | 保證 | 強度 | 機制 |
 |---|---|---|
-| G0 紅旗（短路自傷/虐待 → 轉介;警訊 → severity↑） | **硬（code）** | ① 輸入 + ③ 每輪 reaction,可拒絕 |
+| G0 紅旗（短路自傷/虐待 → 轉介;警訊 → severity↑） | **硬（code）** | ① 輸入 + ③ 每輪 reaction + ④ 四個自由文本(④ 命中不拒收:轉介必達 + severity↑) |
 | 必填軸 / 正向紀錄 `script_decision` 閘 | **硬（code）** | ②；缺則不解鎖 |
 | 禁用詞 `pattern_check` | **硬（code）** | ④ 落庫前;不過拒收 |
 | FSM 序 / DB 不變量 / Erikson-Piaget / `converged` / 反應強調映射 | **硬（code）** | server 端 |
