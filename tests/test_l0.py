@@ -132,6 +132,29 @@ async def test_converged_rules(client: Client) -> None:
     assert await _react(client, sid4, "鬆動配合", "他配合了,但我剛才罵他欠揍") is False
 
 
+# spec v3.0 converged 判定表(defect-fixes #5;字面複寫,守 code 投影不漂移)
+CONVERGED_TABLE: list[tuple[list[str], bool]] = [
+    (["鬆動配合"], True),                                          # 無高張力史
+    (["情緒爆發", "鬆動配合"], False),                              # 高張力後第一個鬆動
+    (["情緒爆發", "鬆動配合", "鬆動配合"], True),                    # 連續第二輪
+    (["情緒爆發", "否認堅持", "鬆動配合"], False),                   # 夾一輪不洗白(本次修正點)
+    (["情緒爆發", "否認堅持", "鬆動配合", "鬆動配合"], True),
+]
+
+
+async def test_converged_decision_table(client: Client) -> None:
+    """#5:converged 以最近一次高張力為錨點,逐列驗 spec 判定表。"""
+    for seq, expected in CONVERGED_TABLE:
+        sid = await ready_session(client)
+        await client.call_tool("core_tags", {"session_id": sid})
+        last: dict[str, Any] | None = None
+        for reaction in seq:
+            note = "大哭摔積木" if reaction in {"情緒爆發", "退縮害怕"} else None
+            last = data_of(await client.call_tool("core_tags", {
+                "session_id": sid, "child_reaction": reaction, "reaction_note": note}))
+        assert last is not None and last["converged"] is expected, seq
+
+
 async def test_severity_monotonic_raises(client: Client, db: MemoryDatabase) -> None:
     """severity 單調只升不降:② intensity=高 → 中;③ 警訊 → 高。"""
     sid = await ready_session(client, emotion_intensity="高")

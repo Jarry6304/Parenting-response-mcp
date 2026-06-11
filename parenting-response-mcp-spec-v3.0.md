@@ -3,6 +3,7 @@ spec: parenting-response / mcp
 version: 3.0
 status: LOCKED（架構與三項待議全數定案,不再討論）
 date: 2026-06-11
+amended: 2026-06-11（defect-fixes v1.0,#1–#5 已併入:stopped record / ④ G0 / ④ 須 ≥1 輪 ③ / 高張力 note 閘 / converged 錨點）
 supersedes: v2.2（fat server + 自有 API key + code 強制隔離）→ v3.0（thin server + 零 API key + host 耦合 + 盡量隔離）
 ---
 
@@ -104,6 +105,16 @@ stateDiagram-v2
 | 反問試探 | nvc, pd |
 | 轉移打岔 | gottman, pd |
 | round 0（無 reaction） | 6 核心全 primary |
+
+**converged 判定（code 規則,D3 投影;單一來源 = 本表,defect-fixes #5）** — `鬆動配合 ∧ 無警訊 ∧ 自最近一次高張力反應（情緒爆發/退縮害怕）後已有 ≥1 輪鬆動配合`;高張力與鬆動之間夾其他反應**不重置**防線（討好式順從常見軌跡「爆發→嘴硬→順從」不得洗白）;無高張力史 → 首個鬆動即收斂;round 0 恆 False。
+
+| 反應序列（…→ 本輪） | converged |
+|---|---|
+| （無高張力史）→ 鬆動 | True |
+| 爆發 → 鬆動 | False |
+| 爆發 → 鬆動 → 鬆動 | True |
+| 爆發 → 堅持 → 鬆動 | False |
+| 爆發 → 堅持 → 鬆動 → 鬆動 | True |
 
 | 規則 | 說明 |
 |---|---|

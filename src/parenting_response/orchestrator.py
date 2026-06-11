@@ -175,8 +175,8 @@ class Orchestrator:
         if round_no > 0 and child_reaction is not None:
             primary = REACTION_PRIMARY[child_reaction]
 
-        prev_reaction = rounds[-1].get("child_reaction") if rounds else None
-        converged = self._converged(child_reaction, round_no, prev_reaction, warning_hit)
+        prior_reactions: list[str | None] = [r.get("child_reaction") for r in rounds]
+        converged = self._converged(child_reaction, round_no, prior_reactions, warning_hit)
 
         band = str(s["age_band"])
         stages = {"erikson": ERIKSON_BY_BAND[band],  # 確定性查表,不經 LLM
@@ -370,16 +370,25 @@ class Orchestrator:
 
     @staticmethod
     def _converged(
-        child_reaction: str | None, round_no: int, prev_reaction: Any, warning_hit: bool,
+        child_reaction: str | None, round_no: int,
+        prior_reactions: list[str | None], warning_hit: bool,
     ) -> bool:
-        """D3 投影(零 LLM):鬆動配合 ∧ 無警訊 ∧ 前一輪非高張力。
+        """D3 投影(零 LLM;單一來源 = spec v3.0「converged 判定表」):
+        鬆動配合 ∧ 無警訊 ∧ 自最近一次高張力反應後已有 ≥1 輪鬆動配合。
 
-        高張力(情緒爆發/退縮害怕)後的第一個鬆動配合 → False(討好式順從防線),
-        連續第二輪鬆動配合 → True;round 0 恆 False。
+        高張力(情緒爆發/退縮害怕)與鬆動之間夾其他反應**不重置**防線——
+        討好式順從常見軌跡「爆發→嘴硬→順從」不得洗白;無高張力史 → 首個鬆動
+        即 True;round 0 恆 False。
         """
         if round_no == 0 or child_reaction != "鬆動配合" or warning_hit:
             return False
-        return str(prev_reaction or "") not in _HIGH_TENSION_REACTIONS
+        eased = 0
+        for prev in reversed(prior_reactions):  # 反向掃描至最近一次高張力
+            if prev == "鬆動配合":
+                eased += 1
+            elif str(prev or "") in _HIGH_TENSION_REACTIONS:
+                return eased >= 1
+        return True  # 無高張力史
 
     # ── 推導與工具 ────────────────────────────────────────────────
 

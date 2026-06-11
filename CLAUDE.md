@@ -27,7 +27,7 @@ uv run alembic upgrade head   # 需 DATABASE_URL(0002 冪等,既有庫可直升)
 - 正向紀錄硬閘:缺 `script_decision` 不解鎖;skip 走 short ④(`draft=NULL`,不跑 `pattern_check`);一般 ④ 須先 ③ 至少一輪、必有 draft 且過禁用詞檢才落庫。
 - 終態寫入一律走 `db.finalize_tx`(條件式 `WHERE status='open'` + records UNIQUE);不要繞過。
 - ① 約束集 = 8 校紅線聯集 ∪ wordlists 禁用詞 pattern;探詢核心(maslow/satir)只進 ①,不進 ③ 耦合。
-- `converged` 為 code 規則(D3 投影):鬆動配合 ∧ 無警訊 ∧ 前一輪非高張力(情緒爆發/退縮害怕後需連續兩輪)。
+- `converged` 為 code 規則(D3 投影,單一來源 = spec v3.0 判定表):鬆動配合 ∧ 無警訊 ∧ 自最近一次高張力後已有 ≥1 輪鬆動配合(夾其他反應不重置防線)。
 
 ## 測試與依賴
 
