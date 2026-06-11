@@ -1,0 +1,44 @@
+[project]
+name = "parenting-response-mcp"
+version = "0.1.0"
+description = "Fat MCP server for parenting-response — spec v2.2 + resonance-c-light v3"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=2.12,<3",
+    "pydantic>=2.8",
+    "anthropic>=0.40",
+    "psycopg[binary,pool]>=3.2",
+    "alembic>=1.13",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pyright>=1.1.390",
+]
+
+[project.scripts]
+parenting-response-mcp = "parenting_response.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/parenting_response"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.pyright]
+# strict 範圍 = src(spec:內部路徑近編譯期檢查);tests 靠 pytest fixture 動態注入
+# 與 fastmcp Client 泛型,在 strict 下純噪音,由 runtime 驗收測試覆蓋。
+include = ["src"]
+typeCheckingMode = "strict"
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
