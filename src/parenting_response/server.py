@@ -10,6 +10,7 @@ host(Claude)負責 S1 探詢、6 回應核心 TAG 的耦合生成、對 user 講
 from __future__ import annotations
 
 import os
+import sys
 from typing import Any
 
 from fastmcp import FastMCP
@@ -135,11 +136,15 @@ def main() -> None:
     from .db import PgDatabase
 
     dsn = os.environ["DATABASE_URL"]
-    host = os.environ.get("HOST", "0.0.0.0")
+    # secure-by-default:預設只綁 loopback;對外暴露須顯式 HOST=…(records 含兒少個資)
+    host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     token = os.environ.get("MCP_BEARER_TOKEN")
     ttl_days = int(os.environ.get("SESSION_TTL_DAYS", "30"))  # ≤0 = 停用棄案清掃
     auth = StaticTokenVerifier(tokens={token: {"client_id": "mcp-host"}}) if token else None
+    if auth is None and host not in ("127.0.0.1", "localhost", "::1"):
+        print("警告:HOST 綁非 loopback 且未設 MCP_BEARER_TOKEN——同網段任何人可讀寫"
+              "兒少個資紀錄;對外暴露前請設 token 或以反向代理加閘。", file=sys.stderr)
 
     async def _run() -> None:
         db = PgDatabase(dsn)

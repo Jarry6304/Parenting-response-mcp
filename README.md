@@ -33,9 +33,12 @@ uv run pyright       # strict(src),0 errors
 ```bash
 export DATABASE_URL=postgresql://user:pass@localhost/parenting_response
 export MCP_BEARER_TOKEN=change-me   # 選填:設了即啟用 bearer 閘
+export SESSION_TTL_DAYS=30          # 選填:棄案 TTL(≤0 停用)
 uv run alembic upgrade head         # 既有庫升級(或交由啟動時 ensure_schema)
-uv run parenting-response-mcp       # streamable-HTTP,預設 0.0.0.0:8000
+uv run parenting-response-mcp       # streamable-HTTP,預設 127.0.0.1:8000
 ```
+
+對外暴露須顯式 `HOST=0.0.0.0`(或指定網卡):records 含兒少個資,**請務必同時設 bearer token** 或以反向代理加閘——綁非 loopback 而未設 token 會在啟動時印出警告。
 
 Claude custom connector:URL 填 `https://<host>:<port>/mcp`,有 token 則以 bearer 連線。
 **部署 = repo checkout + `uv run`**(`references/` 是 runtime 輸入,不隨 wheel 打包)。
