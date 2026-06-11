@@ -1,7 +1,6 @@
 ---
 core: gottman
 role: 産招
-family: Gottman（自成一家,⚠ 推測 de facto,見 cores/README）
 model_default: sonnet
 status: DRAFT（待審）
 date: 2026-06-11

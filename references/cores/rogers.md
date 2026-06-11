@@ -1,7 +1,6 @@
 ---
 core: rogers
 role: 産招
-family: 人本系（⚠ 推測 de facto,見 cores/README）
 model_default: sonnet
 status: DRAFT（待審）
 date: 2026-06-11

@@ -1,7 +1,6 @@
 ---
 core: dreikurs
 role: 産招（兼出 purpose 判讀,A3 來源）
-family: Adler 系（⚠ 推測 de facto,見 cores/README）
 model_default: haiku（判別型;utterance 品質敏感時 config 升 sonnet）
 status: DRAFT（待審）
 date: 2026-06-11

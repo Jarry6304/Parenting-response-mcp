@@ -1,7 +1,6 @@
 ---
 core: adler
 role: 觀點（不出候選、不出約束）
-family: Adler 系（⚠ 推測 de facto,見 cores/README）
 model_default: sonnet
 status: DRAFT（待審）
 date: 2026-06-11

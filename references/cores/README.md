@@ -13,20 +13,20 @@ consumers: src/cores/*（呼叫封裝）, synthesis.py, postcheck.py, orchestrat
 
 ## 角色與配置總表
 
-| core | 檔 | 角色 | 家族(折算用) | model_default |
-|---|---|---|---|---|
-| 正向教養 | `pd.md` | 産招 | Adler 系 | sonnet |
-| Dreikurs | `dreikurs.md` | 産招 | Adler 系 | haiku |
-| Gottman | `gottman.md` | 産招 | Gottman | sonnet |
-| NVC | `nvc.md` | 産招 | 人本系 | sonnet |
-| Rogers | `rogers.md` | 産招 | 人本系 | sonnet |
-| Adler | `adler.md` | 觀點 | Adler 系 | sonnet |
-| Maslow | `maslow.md` | 約束 | Maslow | haiku |
-| Satir | `satir.md` | 約束 | Satir | sonnet |
-| Erikson | `erikson.md` | 約束 | 發展系 | haiku |
-| Piaget | `piaget.md` | 約束 | 發展系 | haiku |
+| core | 檔 | 角色 | model_default |
+|---|---|---|---|
+| 正向教養 | `pd.md` | 産招 | sonnet |
+| Dreikurs | `dreikurs.md` | 産招 | haiku |
+| Gottman | `gottman.md` | 産招 | sonnet |
+| NVC | `nvc.md` | 産招 | sonnet |
+| Rogers | `rogers.md` | 産招 | sonnet |
+| Adler | `adler.md` | 觀點 | sonnet |
+| Maslow | `maslow.md` | 約束 | haiku |
+| Satir | `satir.md` | 約束 | sonnet |
+| Erikson | `erikson.md` | 約束 | haiku |
+| Piaget | `piaget.md` | 約束 | haiku |
 
-**⚠ 家族分組為推測 de facto**(上游 spec-v2 不可得):Adler 系 = 理論同根(Dreikurs 為 Adler 直系;正向教養承 Adler/Dreikurs);人本系 = Rosenberg 師承 Rogers;發展系 = 階段論結構同形;Gottman/Satir/Maslow 各自成家。共 6 家族。合成折算原則:**同家族共振須折算,跨家族共振才算獨立印證**——細則待 `resonance-c-light.md` 重產時定案。
+**去家族化(resonance v3)**:合成不分族、不折算、不加權——家族標籤無消費端,本目錄不含任何家族/譜系後設資訊;十核心在合成版面中**等格式、等地位、順序洗牌**(契約見 `resonance-c-light.md` v3)。
 
 模型對齊 v2.2 模型策略:細膩語感(Satir/Adler + 産招話術四核)→ sonnet;判別型(Dreikurs 目的分類、Maslow/Erikson/Piaget 約束分析)→ haiku 預設,config 可升。
 
@@ -67,7 +67,7 @@ consumers: src/cores/*（呼叫封裝）, synthesis.py, postcheck.py, orchestrat
 | 約束 | `{ "analysis": "<2–4 句>", "constraints": [<0–3 條>], <核心特定欄位> }` |
 
 - `posture` 受控 8 值(定義見 `record-schema.md`):同理接住/情緒教練/溫和設限/給選擇/自然後果/共同解題/修復關係/退場降溫。
-- `confidence` = **本鏡頭對此情境的適配度**,不是話術自評。不適配要誠實低分(≤0.4)——合成靠它選路徑,虛高分數 = 污染合成。
+- `confidence` = **本鏡頭對此情境的適配度**,不是話術自評。resonance v3 下它**不進合成版面**(顯示即加權誘因,且跨核心自評不可比),由 code 排版時剝除,僅落 `rounds.core_outputs` 供 L1 審計(自評適配 vs 實際取用率對照);仍要求不適配時誠實低分(≤0.4)——審計失真即無意義。
 - **核心特定欄位 = A3 聚合與 pingpong 的資料來源,欄位名即 de facto 契約**:`dreikurs.purpose`、`maslow.unmet_needs`、`erikson.stage_observed/within_norm`、`piaget.stage_observed/within_norm`、`satir.child_stance/parent_stance`、`gottman.emotion_processed`。改名 = 破壞 L0 聚合/converged 判準,須過 record-schema 版本管理。
 
 ## constraint 物件(約束核心)
@@ -88,3 +88,5 @@ consumers: src/cores/*（呼叫封裝）, synthesis.py, postcheck.py, orchestrat
 ## 載入方式
 
 各核心檔「system prompt」節全文 = anthropic API 的 `system` 參數;`user` message = 上述情境 JSON 字串。每核心一次獨立呼叫(`asyncio.gather` 單波並行),無共享 context——這就是隔離的實作面。
+
+全部核心原始輸出由 orchestrator 全量落 `rounds.core_outputs`(隔離審計 + A3 聚合來源);進合成的只有 v3 並列版面投影——`{ core, analysis, candidate }`,無 confidence、無任何權重欄。

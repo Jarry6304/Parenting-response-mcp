@@ -1,7 +1,6 @@
 ---
 core: erikson
 role: 約束
-family: 發展系（⚠ 推測 de facto,見 cores/README）
 model_default: haiku
 status: DRAFT（待審）
 date: 2026-06-11
