@@ -1,7 +1,8 @@
 ---
 spec: parenting-response / cores
 version: 0.1
-status: DRAFT（待審）
+status: superseded（v3.0 起學派 TAG 單一事實來源 = tags.md;僅供歷史參照）
+superseded_by: references/cores/tags.md
 date: 2026-06-11
 implements: parenting-response-mcp-spec-v2.2.md（核心呼叫契約 / 模型策略 / 嚴格隔離面）
 consumers: src/cores/*（呼叫封裝）, synthesis.py, postcheck.py, orchestrator.py

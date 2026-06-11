@@ -1,7 +1,8 @@
 ---
 spec: parenting-response / pingpong
 version: 0.1
-status: DRAFT（待審）
+status: superseded（v3.0 改反應二級強調 + converged code 規則;僅供歷史參照）
+superseded_by: parenting-response-mcp-spec-v3.0.md（反應二級強調表 / D3 投影）
 date: 2026-06-11
 implements: parenting-response-mcp-spec-v2.2.md（next_round 管線 / converged / D3）
 consumers: orchestrator.py（點火路由）, redflag.py（複檢順位）, client prompt（六類分類指引、converged 呈現）

@@ -2,7 +2,8 @@
 core: satir
 role: 約束
 model_default: sonnet（姿態判讀屬細膩語感,v2.2 模型策略）
-status: DRAFT（待審）
+status: superseded（v3.0 起由 tags.md 取代;僅供歷史參照）
+superseded_by: tags.md
 date: 2026-06-11
 constraint_type: 不損自我
 ---
