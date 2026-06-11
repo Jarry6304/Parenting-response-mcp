@@ -57,6 +57,10 @@ REACTION_PRIMARY: dict[str, tuple[str, ...]] = {
 # D3 投影:高張力反應後的第一個「鬆動配合」不算收斂(討好式順從防線)
 _HIGH_TENSION_REACTIONS = {"情緒爆發", "退縮害怕"}
 
+# record_id 的「當日」= 臺北日,與部署主機時區無關(record-schema);
+# 台灣自 1980 無夏令時,固定 +8 免 tzdata 依賴
+_TZ_TAIPEI = _dt.timezone(_dt.timedelta(hours=8))
+
 
 class Orchestrator:
     def __init__(self, db: Database, *, session_ttl_days: int = 30) -> None:
@@ -343,7 +347,7 @@ class Orchestrator:
         raise PRError(E_INVALID_STATE, "record_id 連續撞號,放棄")
 
     async def _next_record_id(self) -> str:
-        prefix = _dt.date.today().strftime("%Y%m%d")
+        prefix = _dt.datetime.now(_TZ_TAIPEI).strftime("%Y%m%d")
         n = await self.db.count_records_with_prefix(prefix) + 1
         return f"{prefix}-{n:02d}"
 
