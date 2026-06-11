@@ -4,7 +4,7 @@ version: 0.2
 status: DRAFT（schema_version 2 隨 spec v3.0 落地;v1 節保留供讀舊列）
 date: 2026-06-11
 implements: parenting-response-mcp-spec-v3.0.md（records v2）;歷史:v2.2（records v1 / A3）
-consumers: orchestrator.py（④ 落庫）, schema.py（受控詞表）, db.py, migrations/0002, 未來 L1–L4
+consumers: orchestrator.py（④ 落庫 / events 稽核）, schema.py（受控詞表）, db.py, migrations/0002・0003, 未來 L1–L4
 ---
 
 # record-schema — L0 欄位語意、受控詞表、聚合/落庫規則

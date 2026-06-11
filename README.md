@@ -24,7 +24,7 @@
 
 ```bash
 uv venv --python 3.12 && uv sync
-uv run pytest -q     # 32 條驗收(in-memory,免 PG、免任何 API key)
+uv run pytest -q     # 63 條驗收(in-memory,免 PG、免任何 API key)
 uv run pyright       # strict(src),0 errors
 ```
 
@@ -64,8 +64,8 @@ src/parenting_response/
 ├── schema.py        # 受控詞表 + 錯誤碼
 ├── wordlists.py     # antipatterns 的 code 投影
 └── db.py            # psycopg3 + 不變量;Memory 同語意(測試)
-migrations/          # Alembic(0001 初始 / 0002 v3 冪等升級)
-tests/               # 32 條驗收(零 LLM)
+migrations/          # Alembic(0001 初始 / 0002 v3 / 0003 events,皆冪等)
+tests/               # 63 條驗收(零 LLM)
 ```
 
 已知邊界:真 PG 遷移與 bearer 閘待真環境整合驗證;未來 L1–L4 聚合、SQLite 後端、fastmcp 3.x 升級皆為獨立決策。

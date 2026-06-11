@@ -6,9 +6,9 @@
 
 ```bash
 uv sync                # 安裝(Python 3.12+;.venv)
-uv run pytest -q       # 32 條驗收(in-memory,免 PG、免 API key)
+uv run pytest -q       # 63 條驗收(in-memory,免 PG、免 API key)
 uv run pyright         # strict,範圍 = src/(必須 0 errors)
-uv run alembic upgrade head   # 需 DATABASE_URL(0002 冪等,既有庫可直升)
+uv run alembic upgrade head   # 需 DATABASE_URL(0002/0003 冪等,既有庫可直升)
 ```
 
 ## 事實來源的階層(改東西前先看這裡)
@@ -16,7 +16,7 @@ uv run alembic upgrade head   # 需 DATABASE_URL(0002 冪等,既有庫可直升)
 1. **`parenting-response-mcp-spec-v3.0.md` 是總規格(LOCKED)**;行為與規格衝突 = bug。標 `superseded` 各檔(含 v2.2)僅供歷史參照。
 2. **學派 TAG 單一事實來源 = `references/cores/tags.md`**,runtime 由 `cores/__init__.py` 解析(8 校完整性 fail-fast)。改 TAG 改文件,不改 code。
 3. **`wordlists.py` 是 `references/tw-parenting-antipatterns.md` 的 code 投影**:先改文件,再同步 code。
-4. records 欄位語意與 `schema_version`(現 = 2)歸 `references/record-schema.md` 版本管理:變更必 bump 並同步 Alembic 遷移。
+4. records 欄位語意與 `schema_version`(現 = 2)歸 `references/record-schema.md` 版本管理:變更必 bump 並同步 Alembic 遷移;`events` kind/payload 契約同歸該檔(append-only 稽核表,不動 `schema_version`)。
 5. `REACTION_PRIMARY` 與 converged 規則的單一來源 = spec v3.0;orchestrator 內為 code 投影,改映射先改 spec。
 
 ## 不可破壞的不變量
