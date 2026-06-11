@@ -1,399 +1,255 @@
-"""編排器:FSM 守衛 → G0 → 單波 fan-out → 合成(v3)→ 後檢 → 落庫 → 聚合回填。
+"""編排器(v3.0):FSM 守衛 → G0 → 回傳靜態 TAG → 後檢 → 落庫。**全程零 LLM。**
 
-全部「不得違反」在此以 code 斷言;LLM 呼叫永遠在守衛之後(可斷言:違序 LLM 計數 = 0)。
+不變量(可斷言:無 LLM client 物件):
+  FSM stage:constrained → {ready|short_pending} → {finalized|redflag_stopped}
+  違 stage 呼叫一律 E_INVALID_STATE,零成本
+  records UNIQUE(session_id);status 條件式轉移 WHERE status='open'
+
+v2.2 fat(自打 API 產招)→ v3.0 thin(回傳 TAG,host 耦合)。
 """
 
 from __future__ import annotations
 
 import datetime as _dt
-import json
-import random
 import uuid
 from typing import Any
 
-from . import pingpong
-from .cores import fan_out
+from .cores import inquiry_probes, red_line_union, response_tags
 from .db import Database, UniqueViolation
-from .llm import LLMClient
 from .redflag import check_shortcircuit, check_warning
 from .schema import (
-    ALL_CORES,
+    AGE_BANDS,
     CHILD_REACTIONS,
-    CONSTRAINT_CORES,
-    E_CORES_UNAVAILABLE,
     E_INVALID_LINK,
-    E_INVALID_REACTION,
     E_INVALID_STATE,
     E_MISSING_AXIS,
     ERIKSON_BY_BAND,
+    INTENSITIES,
     MASLOW_ORDER,
+    MODES,
     OUTCOMES,
     PIAGET_BY_BAND,
-    PRODUCER_CORES,
+    POSITIVE_LOG,
+    PROBLEM_CATEGORIES,
+    RESPONSE_CORES,
+    SCRIPT_DECISIONS,
     SEVERITY_ORDER,
-    AnalyzeResult,
-    Card,
-    Constraint,
     PRError,
-    RoundResult,
-    SituationInput,
-    SynthesisTrace,
-    constraint_key,
-    parse_constraints,
+    Redflag,
 )
-from .postcheck import guardian_check, pattern_check
-from .synthesis import (
-    SourceVerificationError,
-    build_degraded_card,
-    dump_card,
-    dump_trace,
-    make_trace,
-    situation_summary_line,
-    synthesize_once,
-    verify_sources,
+from .wordlists import (
+    OUTPUT_PATTERN_F2,
+    OUTPUT_PATTERN_F3,
+    OUTPUT_PATTERN_F5,
+    find_output_violations,
 )
 
-_SEVERITY_RISK_CONFOUNDERS = {"F1", "F4", "F8"}
+# 反應二級強調(單一來源 = spec v3.0「反應二級強調」表;此處為 code 投影,僅含 6 回應核心)
+REACTION_PRIMARY: dict[str, tuple[str, ...]] = {
+    "鬆動配合": ("pd", "adler"),
+    "否認堅持": ("dreikurs", "adler", "pd"),
+    "情緒爆發": ("gottman", "rogers"),
+    "退縮害怕": ("rogers", "nvc"),
+    "反問試探": ("nvc", "pd"),
+    "轉移打岔": ("gottman", "pd"),
+}
+
+# D3 投影:高張力反應後的第一個「鬆動配合」不算收斂(討好式順從防線)
+_HIGH_TENSION_REACTIONS = {"情緒爆發", "退縮害怕"}
 
 
 class Orchestrator:
-    def __init__(
-        self,
-        db: Database,
-        llm: LLMClient,
-        *,
-        rng: random.Random | None = None,
-        retry_n: int = 2,
-        k_min: int = 2,
-    ) -> None:
+    def __init__(self, db: Database) -> None:
         self.db = db
-        self.llm = llm
-        self.rng = rng or random.Random()
-        self.retry_n = retry_n
-        self.k_min = k_min
+        # 注意:無 self.llm —— v3 零推論,刻意不收 LLM client
 
-    # ── [2] analyze_situation(S2,內含 G0) ─────────────────────────
+    # ── ① constraints(約束探詢,內含 G0) ─────────────────────────
 
-    async def analyze(self, raw: dict[str, Any]) -> AnalyzeResult:
-        # FSM 守衛:必填軸驗證(E_MISSING_AXIS 的 code 代理),先於一切 LLM。
-        try:
-            s = SituationInput.model_validate(raw)
-        except Exception as exc:
-            raise PRError(E_MISSING_AXIS, f"必填軸缺漏或值域外:{exc}") from exc
+    async def constraints(
+        self, *, facts: str | None, emotion: str | None, mode: str | None,
+        child_id: str, linked_plan_id: str | None,
+    ) -> dict[str, Any]:
+        if not facts or not emotion or mode not in MODES:
+            raise PRError(E_MISSING_AXIS, "① 必要:facts / emotion / mode(live|rehearsal)")
 
-        # 守衛:linked_plan_id 須指向存在且 status=planned 的 record(A2)。
-        if s.linked_plan_id is not None:
-            rec = await self.db.get_record(s.linked_plan_id)
+        # linked_plan 守衛(承 v2.2 A2):須指向存在且 status=planned 的 record。
+        if linked_plan_id is not None:
+            rec = await self.db.get_record(linked_plan_id)
             if rec is None or rec.get("status") != "planned":
-                raise PRError(E_INVALID_LINK, f"linked_plan_id={s.linked_plan_id} 不存在或非 planned")
+                raise PRError(E_INVALID_LINK, f"linked_plan_id={linked_plan_id} 不存在或非 planned")
 
         session_id = uuid.uuid4().hex
 
-        # G0 短路級預篩(零核心呼叫;A1:sessions 一列、rounds 零列)。
-        rf = check_shortcircuit(s.facts, s.emotion)
+        rf = check_shortcircuit(facts, emotion)  # G0 短路,code,零成本
         if rf is not None:
-            await self.db.create_session(self._session_row(session_id, s, status="redflag_stopped", severity="高"))
-            return AnalyzeResult(session_id=session_id, card=None, synthesis_trace=None, redflag=rf)
+            await self.db.create_session(self._row(
+                session_id, child_id, mode, facts, emotion,
+                stage="redflag_stopped", status="redflag_stopped",
+                severity="高", linked_plan_id=linked_plan_id,
+            ))
+            return {"session_id": session_id, "redflag": rf.model_dump(),
+                    "referral": rf.referral, "card": None}
 
-        warnings = check_warning(s.facts, s.emotion)
+        warning = check_warning(facts, emotion)
+        await self.db.create_session(self._row(
+            session_id, child_id, mode, facts, emotion,
+            stage="constrained", status="open",
+            severity="高" if warning else "低", linked_plan_id=linked_plan_id,
+        ))
+        return {
+            "session_id": session_id,
+            "constraints": self._constraint_set(),     # 8 校紅線聯集 ∪ 禁用詞 pattern
+            "inquiry_probes": self._inquiry_probes(),  # Maslow/Satir 探點(引導 S1)
+            "next": "prerequisites",
+        }
 
-        situation = self._situation_dict(s.model_dump(), round_no=0, history=[])
-        payload = self._payload(situation)
+    # ── ② prerequisites(必填軸 + 正向紀錄硬閘) ───────────────────
 
-        # 單波 fan-out:全 10 核心隔離並行。
-        outputs = await fan_out(list(ALL_CORES), payload, self.llm)
+    async def prerequisites(
+        self, *, session_id: str, age_band: str | None,
+        emotion_intensity: str | None, problem_category: str | None,
+        script_decision: str | None,
+    ) -> dict[str, Any]:
+        s = await self._require_stage(session_id, "constrained")
 
-        if not any(outputs.get(p) for p in PRODUCER_CORES):
-            raise PRError(E_CORES_UNAVAILABLE, "産招核心全數失敗,不出卡")
+        if age_band not in AGE_BANDS or emotion_intensity not in INTENSITIES:
+            raise PRError(E_MISSING_AXIS, "② 必填:age_band(2-3|4-6|7-11|12+)/ emotion_intensity(低|中|高)")
+        if problem_category is not None and problem_category not in PROBLEM_CATEGORIES:
+            raise PRError(E_MISSING_AXIS, f"problem_category 不在受控詞表:{problem_category}")
 
-        constraints = parse_constraints(outputs)
-        card, trace, degraded = await self._pipeline(
-            situation=situation, called=list(ALL_CORES), outputs=outputs, constraints=constraints
-        )
+        # 正向紀錄硬閘:缺 script_decision → ask-gate,不解鎖任何後續
+        if problem_category == POSITIVE_LOG and script_decision not in SCRIPT_DECISIONS:
+            return {"requires": "script_decision",
+                    "ask": "這是正向紀錄,需要幫你產生回應劇本嗎?(skip=只記事 / generate=產劇本)"}
 
-        severity = self._severity(s, warning_hit=bool(warnings), constraint_count=len(constraints))
-        await self.db.create_session(self._session_row(session_id, s, status="open", severity=severity))
-        await self.db.insert_round(
-            session_id, child_reaction=None, reaction_note=None,
-            card=dump_card(card), core_outputs=outputs, synthesis_trace=dump_trace(trace),
-            degraded=degraded,
-        )
-        return AnalyzeResult(
-            session_id=session_id, card=card, synthesis_trace=trace, redflag=None, degraded=degraded
-        )
+        updates: dict[str, Any] = {
+            "age_band": age_band, "emotion_intensity": emotion_intensity,
+            "problem_category": problem_category,
+            "is_positive_log": problem_category == POSITIVE_LOG,
+        }
+        if emotion_intensity == "高":
+            updates["severity"] = self._raise(s.get("severity"), "中")
 
-    # ── [3] next_round(S3 乒乓) ──────────────────────────────────
+        if problem_category == POSITIVE_LOG and script_decision == "skip":
+            updates["stage"] = "short_pending"
+            await self.db.update_session(session_id, updates)
+            return {"next": "finalize", "mode": "short"}
 
-    async def next_round(
-        self, session_id: str, child_reaction: str, reaction_note: str | None = None
-    ) -> RoundResult:
-        # FSM 守衛(先於一切 LLM):session 存在 ∧ open ∧ round 0 存在。
-        session = await self.db.get_session(session_id)
-        if session is None or session["status"] != "open":
-            raise PRError(E_INVALID_STATE, f"session {session_id} 不存在或非 open")
+        updates["stage"] = "ready"
+        await self.db.update_session(session_id, updates)
+        return {"next": "core_tags"}
+
+    # ── ③ core_tags(乒乓,可 ×n) ─────────────────────────────────
+
+    async def core_tags(
+        self, *, session_id: str, child_reaction: str | None, reaction_note: str | None,
+    ) -> dict[str, Any]:
+        s = await self._require_stage(session_id, "ready")
         rounds = await self.db.get_rounds(session_id)
-        if not rounds:
-            raise PRError(E_INVALID_STATE, "round 0 不存在")
-        if child_reaction not in CHILD_REACTIONS:
-            raise PRError(E_INVALID_REACTION, f"child_reaction 須 ∈ 六類,收到:{child_reaction}")
+        round_no = len(rounds)
 
-        # G0 複檢(對 reaction_note;空則對 child_reaction 字面——六類受控值必不命中)。
-        rf = check_shortcircuit(reaction_note if reaction_note else child_reaction)
-        if rf is not None:
-            record = await self._build_record(
-                session, rounds, outcome="escalated_to_redflag",
-                outcome_note=rf.reason, parent_self_note=None, followup=None,
-            )
-            ok = await self._finalize_with_id_retry(
-                session_id, terminal_status="redflag_stopped",
-                session_updates={
-                    "severity": "高",
-                    "goal_aligned": self._goal_aligned(session.get("parent_goal"), "escalated_to_redflag"),
-                },
-                record=record,
-            )
-            if not ok:
-                raise PRError(E_INVALID_STATE, "session 已非 open(並發轉移)")
-            return RoundResult(card=None, synthesis_trace=None, converged=False, redflag=rf)
+        warning_hit = False
+        if round_no == 0:
+            if child_reaction is not None:
+                raise PRError(E_INVALID_STATE, "round 0 不收 child_reaction(spec:round 0 = NULL)")
+        else:  # 乒乓輪需 reaction
+            if child_reaction not in CHILD_REACTIONS:
+                raise PRError(E_INVALID_STATE, f"child_reaction 須 ∈ 六類:{child_reaction}")
+            rf = check_shortcircuit(reaction_note if reaction_note else child_reaction)  # G0 複檢
+            if rf is not None:
+                await self._escalate(session_id, s, rf)
+                return {"redflag": rf.model_dump(), "referral": rf.referral, "card": None}
+            warning_hit = bool(check_warning(reaction_note))
+            if warning_hit and SEVERITY_ORDER[str(s.get("severity") or "低")] < SEVERITY_ORDER["高"]:
+                await self.db.update_session(session_id, {"severity": "高"})  # 單調只升不降
 
-        warnings = check_warning(reaction_note)
-        if warnings and SEVERITY_ORDER[str(session.get("severity") or "低")] < SEVERITY_ORDER["高"]:
-            await self.db.update_session(session_id, {"severity": "高"})  # 單調只升不降
+        primary: tuple[str, ...] = RESPONSE_CORES  # round 0:6 核心全 primary
+        if round_no > 0 and child_reaction is not None:
+            primary = REACTION_PRIMARY[child_reaction]
 
-        prev_reaction = rounds[-1].get("child_reaction")
-        cores, r_plus = pingpong.ignition_set(child_reaction, prev_reaction)
+        prev_reaction = rounds[-1].get("child_reaction") if rounds else None
+        converged = self._converged(child_reaction, round_no, prev_reaction, warning_hit)
 
-        next_no = int(rounds[-1]["round_no"]) + 1
-        history = [
-            {"round_no": r["round_no"], "child_reaction": r["child_reaction"], "reaction_note": r.get("reaction_note")}
-            for r in rounds
-            if r["round_no"] > 0
-        ]
-        history.append({"round_no": next_no, "child_reaction": child_reaction, "reaction_note": reaction_note})
-
-        situation = self._situation_dict(session, round_no=next_no, history=history)
-        payload = self._payload(situation)
-        outputs = await fan_out(cores, payload, self.llm)
-
-        if not any(outputs.get(p) for p in PRODUCER_CORES if p in cores):
-            raise PRError(E_CORES_UNAVAILABLE, "本輪産招核心全數失敗,不出卡")
-
-        # 約束跨輪沿用:歷輪 ∪ 本輪,(type, rule) 去重(pingpong.md)。
-        prev_constraints: list[Constraint] = []
-        for r in rounds:
-            prev_constraints.extend(parse_constraints(r["core_outputs"]))
-        new_constraints = parse_constraints(outputs)
-        known_types = {c.type for c in prev_constraints}
-        merged: dict[tuple[str, str], Constraint] = {constraint_key(c): c for c in prev_constraints}
-        for c in new_constraints:
-            merged.setdefault(constraint_key(c), c)
-        accumulated = list(merged.values())
-
-        card, trace, degraded = await self._pipeline(
-            situation=situation, called=cores, outputs=outputs, constraints=accumulated
-        )
-
-        converged = False
-        if not degraded:
-            converged = pingpong.compute_converged(
-                reaction=child_reaction, r_plus=r_plus, round_outputs=outputs,
-                new_constraints=new_constraints, known_types=known_types,
-                warning_hit=bool(warnings),
-            )
+        band = str(s["age_band"])
+        stages = {"erikson": ERIKSON_BY_BAND[band],  # 確定性查表,不經 LLM
+                  "piaget": PIAGET_BY_BAND[band]}
 
         await self.db.insert_round(
             session_id, child_reaction=child_reaction, reaction_note=reaction_note,
-            card=dump_card(card), core_outputs=outputs, synthesis_trace=dump_trace(trace),
-            degraded=degraded,
+            card=None, core_outputs={"primary": list(primary)},
+            synthesis_trace={}, degraded=False,
         )
-        return RoundResult(
-            card=card, synthesis_trace=trace, converged=converged, redflag=None, degraded=degraded
-        )
+        return {"response_tags": self._response_tags(primary), "dev_stages": stages,
+                "converged": converged, "next": "core_tags | finalize"}
 
-    # ── [4] finalize_record(S4;不進 LLM 管線) ──────────────────
+    # ── ④ finalize(終態;一般 / short) ──────────────────────────
 
     async def finalize(
-        self,
-        session_id: str,
-        outcome: str,
-        outcome_note: str | None = None,
-        parent_self_note: str | None = None,
-        followup: str | None = None,
-    ) -> dict[str, str]:
-        session = await self.db.get_session(session_id)
-        if session is None or session["status"] != "open":
+        self, *, session_id: str, outcome: str, draft: str | None,
+        claimed_sources: list[str] | None, maslow_need: list[str] | None,
+        outcome_note: str | None, parent_self_note: str | None, followup: str | None,
+    ) -> dict[str, Any]:
+        s = await self.db.get_session(session_id)
+        if s is None or s["status"] != "open":
             raise PRError(E_INVALID_STATE, f"session {session_id} 不存在或非 open")
-        rounds = await self.db.get_rounds(session_id)
-        if not rounds:
-            raise PRError(E_INVALID_STATE, "round 0 不存在")
         if outcome not in OUTCOMES:
             raise PRError(E_INVALID_STATE, f"outcome 不在受控詞表:{outcome}")
+        if claimed_sources is not None:
+            unknown = [c for c in claimed_sources if c not in RESPONSE_CORES]
+            if unknown:
+                raise PRError(E_INVALID_STATE, f"claimed_sources 須 ⊆ 6 回應核心:{unknown}")
+        if maslow_need is not None:
+            unknown = [n for n in maslow_need if n not in MASLOW_ORDER]
+            if unknown:
+                raise PRError(E_INVALID_STATE, f"maslow_need 須 ⊆ 缺損四層:{unknown}")
 
-        record = await self._build_record(
-            session, rounds, outcome=outcome, outcome_note=outcome_note,
-            parent_self_note=parent_self_note, followup=followup,
-        )
+        short = s["stage"] == "short_pending"
+        if short:
+            if draft is not None:
+                raise PRError(E_INVALID_STATE, "short 模式不接受 draft(只記事,不產劇本)")
+        else:
+            if s["stage"] != "ready":
+                raise PRError(E_INVALID_STATE, f"stage={s['stage']} 不可 finalize")
+            if draft is None:
+                raise PRError(E_INVALID_STATE, "一般模式須交 draft(host 草稿過後檢才落庫)")
+            violations = self._pattern_check(draft)  # 禁用詞 code 後檢
+            if violations:
+                return {"rejected": True, "violations": violations,
+                        "hint": "draft 含禁用詞,請重生後重交(不落庫)"}
+
+        record = await self._build_record(s, outcome, draft, claimed_sources, maslow_need,
+                                          outcome_note, parent_self_note, followup)
         ok = await self._finalize_with_id_retry(
             session_id, terminal_status="finalized",
-            session_updates={"goal_aligned": self._goal_aligned(session.get("parent_goal"), outcome)},
-            record=record,
+            session_updates={"stage": "finalized"}, record=record,
         )
         if not ok:
             raise PRError(E_INVALID_STATE, "session 已非 open(併發 finalize 恰一成功)")
         return {"record_id": record["record_id"]}
 
-    # ── 合成 + 後檢管線(retry ≤ N;A5 降級) ─────────────────────
+    # ── 共用守衛 / 終態 ───────────────────────────────────────────
 
-    async def _pipeline(
-        self,
-        *,
-        situation: dict[str, Any],
-        called: list[str],
-        outputs: dict[str, dict[str, Any] | None],
-        constraints: list[Constraint],
-    ) -> tuple[Card, SynthesisTrace, bool]:
-        summary = situation_summary_line(situation)
-        inputs_seen = [c for c in called if outputs.get(c)]
-        k_available = sum(1 for c in called if c in CONSTRAINT_CORES and outputs.get(c))
-        presentation_order: list[str] = []
+    async def _require_stage(self, session_id: str, stage: str) -> dict[str, Any]:
+        s = await self.db.get_session(session_id)
+        if s is None or s["status"] != "open" or s["stage"] != stage:
+            raise PRError(E_INVALID_STATE,
+                          f"session {session_id} 須在 stage={stage}(實際:{s and s.get('stage')})")
+        return s
 
-        if k_available < self.k_min:
-            # A5:約束核心可用 < K → 合成完直接降級,正常卡不出。
-            try:
-                _card, _sa, _dv, presentation_order = await synthesize_once(
-                    situation_summary=summary, core_outputs=outputs,
-                    constraints=constraints, llm=self.llm, rng=self.rng,
-                )
-            except Exception:
-                presentation_order = []
-            return self._degraded(called, outputs, constraints, presentation_order)
-
-        for _ in range(self.retry_n + 1):
-            try:
-                card, set_aside, divergences, order = await synthesize_once(
-                    situation_summary=summary, core_outputs=outputs,
-                    constraints=constraints, llm=self.llm, rng=self.rng,
-                )
-                presentation_order = order
-                verify_sources(card, inputs_seen)  # 溯源驗證:code,零 LLM 成本
-            except SourceVerificationError:
-                continue  # 退回重生
-            except Exception:
-                continue
-            if pattern_check(card, constraints):
-                continue  # 禁用詞 → 重生
-            if await guardian_check(card, constraints, self.llm):
-                continue  # 語意違約束 → 重生
-            trace = make_trace(
-                called=called, core_outputs=outputs, presentation_order=presentation_order,
-                card=card, set_aside=set_aside, divergences=divergences,
-            )
-            return card, trace, False
-
-        return self._degraded(called, outputs, constraints, presentation_order)
-
-    def _degraded(
-        self,
-        called: list[str],
-        outputs: dict[str, dict[str, Any] | None],
-        constraints: list[Constraint],
-        presentation_order: list[str],
-    ) -> tuple[Card, SynthesisTrace, bool]:
-        card = build_degraded_card(constraints)
-        trace = make_trace(
-            called=called, core_outputs=outputs, presentation_order=presentation_order,
-            card=card, set_aside=[], divergences=[],
+    async def _escalate(self, session_id: str, s: dict[str, Any], rf: Redflag) -> None:
+        record = await self._build_record(
+            s, "escalated_to_redflag", None, None, None, rf.reason, None, None,
         )
-        return card, trace, True
-
-    # ── A3 聚合回填(record-schema.md 規則) ──────────────────────
-
-    async def _build_record(
-        self,
-        session: dict[str, Any],
-        rounds: list[dict[str, Any]],
-        *,
-        outcome: str,
-        outcome_note: str | None,
-        parent_self_note: str | None,
-        followup: str | None,
-    ) -> dict[str, Any]:
-        purpose: str | None = None
-        maslow_seen = False
-        needs: set[str] = set()
-        erikson_stage: str | None = None
-        erikson_norm: bool | None = None
-        piaget_stage: str | None = None
-        piaget_norm: bool | None = None
-        tools: set[str] = set()
-        posture: str | None = None
-
-        for r in rounds:
-            co: dict[str, Any] = r["core_outputs"]
-            if co.get("dreikurs"):
-                purpose = co["dreikurs"].get("purpose")  # 判讀類取最後
-            if co.get("maslow"):
-                maslow_seen = True
-                needs |= set(co["maslow"].get("unmet_needs", []))
-            if co.get("erikson"):
-                erikson_stage = co["erikson"].get("stage_observed")
-                erikson_norm = co["erikson"].get("within_norm")
-            if co.get("piaget"):
-                piaget_stage = co["piaget"].get("stage_observed")
-                piaget_norm = co["piaget"].get("within_norm")
-            for src in r["synthesis_trace"].get("utterance_sources", []):
-                tools.add(src["core"])  # 溯源即貢獻(resonance v3)
-            if not r.get("degraded"):
-                posture = r["card"].get("posture")  # 最後一張非降級卡
-
-        if purpose == "不明":
-            purpose = None
-        band = str(session["age_band"])
-        dev_normative: bool | None
-        if erikson_norm is None and piaget_norm is None:
-            dev_normative = None
-        elif erikson_norm is None:
-            dev_normative = piaget_norm
-        elif piaget_norm is None:
-            dev_normative = erikson_norm
-        else:
-            dev_normative = erikson_norm and piaget_norm
-
-        mode = str(session["mode"])
-        linked = session.get("linked_plan_id")
-        if mode == "rehearsal":
-            status = "planned"
-        elif linked:
-            status = "done_from_plan"
-        else:
-            status = "done"
-
-        return {
-            "record_id": await self._next_record_id(),
-            "session_id": session["session_id"],
-            "schema_version": 1,
-            "status": status,
-            "linked_plan_id": linked,
-            "dreikurs_purpose": purpose,
-            "maslow_need": [n for n in MASLOW_ORDER if n in needs] if maslow_seen else None,
-            "erikson_stage": erikson_stage or ERIKSON_BY_BAND[band],
-            "piaget_stage": piaget_stage or PIAGET_BY_BAND[band],
-            "dev_normative": dev_normative,
-            "outcome": outcome,
-            "outcome_note": outcome_note,
-            "parent_self_note": parent_self_note,
-            "followup": followup,
-            "tools_used": [c for c in ALL_CORES if c in tools],
-            "posture": posture,
-        }
+        ok = await self._finalize_with_id_retry(
+            session_id, terminal_status="redflag_stopped",
+            session_updates={"severity": "高", "stage": "redflag_stopped"}, record=record,
+        )
+        if not ok:
+            raise PRError(E_INVALID_STATE, "session 已非 open(並發轉移)")
 
     async def _finalize_with_id_retry(
-        self,
-        session_id: str,
-        *,
-        terminal_status: str,
-        session_updates: dict[str, Any],
-        record: dict[str, Any],
+        self, session_id: str, *, terminal_status: str,
+        session_updates: dict[str, Any], record: dict[str, Any],
     ) -> bool:
         # record_id 撞號(同日序號競態)→ 重取重試;UNIQUE(session_id) 由條件式轉移保證不觸發。
         for bump in range(3):
@@ -413,72 +269,96 @@ class Orchestrator:
         n = await self.db.count_records_with_prefix(prefix) + 1
         return f"{prefix}-{n:02d}"
 
+    # ── 落庫組裝 ──────────────────────────────────────────────────
+
+    async def _build_record(
+        self, s: dict[str, Any], outcome: str, draft: str | None,
+        claimed_sources: list[str] | None, maslow_need: list[str] | None,
+        outcome_note: str | None, parent_self_note: str | None, followup: str | None,
+    ) -> dict[str, Any]:
+        band = s.get("age_band")
+        linked = s.get("linked_plan_id")
+        if str(s["mode"]) == "rehearsal":
+            status = "planned"
+        elif linked:
+            status = "done_from_plan"
+        else:
+            status = "done"
+        needs: set[str] = set(maslow_need) if maslow_need else set()
+        return {
+            "record_id": await self._next_record_id(),
+            "session_id": s["session_id"],
+            "schema_version": 2,
+            "status": status,
+            "linked_plan_id": linked,
+            "dreikurs_purpose": None,  # v3 無判讀來源,恆 NULL(record-schema v2)
+            "maslow_need": [n for n in MASLOW_ORDER if n in needs] or None,  # ① 探點命中,host 自報
+            "erikson_stage": ERIKSON_BY_BAND[str(band)] if band else None,  # 查表
+            "piaget_stage": PIAGET_BY_BAND[str(band)] if band else None,    # 查表
+            "dev_normative": None,     # v3 無判讀來源,恆 NULL
+            "claimed_sources": claimed_sources,  # host 自報,不可驗(軟溯源)
+            "draft": draft,
+            "outcome": outcome,
+            "outcome_note": outcome_note,
+            "parent_self_note": parent_self_note,
+            "followup": followup,
+            "tools_used": None,        # v2 遺產欄;v3 改記 claimed_sources
+            "posture": None,           # v3 無判讀來源,恆 NULL
+        }
+
+    # ── 靜態素材(tags.md / wordlists 的 code 出口) ────────────────
+
+    @staticmethod
+    def _constraint_set() -> dict[str, Any]:
+        """① 約束集 = 8 校紅線聯集 ∪ wordlists 禁用詞 pattern(F2/F3/F5)。"""
+        red_lines: list[dict[str, str]] = red_line_union()
+        return {
+            "red_lines": red_lines,
+            "forbidden_patterns": [OUTPUT_PATTERN_F2, OUTPUT_PATTERN_F3, OUTPUT_PATTERN_F5],
+        }
+
+    @staticmethod
+    def _inquiry_probes() -> dict[str, dict[str, str]]:
+        """① 探詢核心(maslow/satir)探點;引導 S1 診斷,不進回應耦合。"""
+        return inquiry_probes()
+
+    @staticmethod
+    def _response_tags(primary: tuple[str, ...]) -> list[dict[str, Any]]:
+        """6 回應核心 TAG,標 primary/support;primary 在前(host 以 primary 領銜耦合)。"""
+        tags = response_tags()
+        ordered = [*(c for c in RESPONSE_CORES if c in primary),
+                   *(c for c in RESPONSE_CORES if c not in primary)]
+        return [{"school": c, "role": "primary" if c in primary else "support", "tag": tags[c]}
+                for c in ordered]
+
+    @staticmethod
+    def _pattern_check(draft: str) -> list[str]:
+        """④ 後檢:wordlists 固定禁用詞(F2/F3/F5 投影);命中即拒落庫。"""
+        return find_output_violations(draft)
+
+    @staticmethod
+    def _converged(
+        child_reaction: str | None, round_no: int, prev_reaction: Any, warning_hit: bool,
+    ) -> bool:
+        """D3 投影(零 LLM):鬆動配合 ∧ 無警訊 ∧ 前一輪非高張力。
+
+        高張力(情緒爆發/退縮害怕)後的第一個鬆動配合 → False(討好式順從防線),
+        連續第二輪鬆動配合 → True;round 0 恆 False。
+        """
+        if round_no == 0 or child_reaction != "鬆動配合" or warning_hit:
+            return False
+        return str(prev_reaction or "") not in _HIGH_TENSION_REACTIONS
+
     # ── 推導與工具 ────────────────────────────────────────────────
 
     @staticmethod
-    def _goal_aligned(parent_goal: Any, outcome: str) -> bool | None:
-        if not parent_goal:
-            return None
-        if outcome == "resolved":
-            return True
-        if outcome == "partial":
-            return None  # 不可判,不臆測
-        return False
+    def _raise(cur: Any, to: str) -> str:
+        cur_s = str(cur or "低")
+        return to if SEVERITY_ORDER[to] > SEVERITY_ORDER.get(cur_s, 0) else cur_s
 
     @staticmethod
-    def _severity(s: SituationInput, *, warning_hit: bool, constraint_count: int) -> str:
-        if s.safety_flag or warning_hit:
-            return "高"
-        if (
-            s.emotion_intensity == "高"
-            or (set(s.confounders or []) & _SEVERITY_RISK_CONFOUNDERS)
-            or constraint_count >= 4
-        ):
-            return "中"
-        return "低"
-
-    @staticmethod
-    def _session_row(session_id: str, s: SituationInput, *, status: str, severity: str) -> dict[str, Any]:
-        return {
-            "session_id": session_id,
-            "child_id": s.child_id,
-            "mode": s.mode,
-            "status": status,
-            "age_band": s.age_band,
-            "facts": s.facts,
-            "emotion": s.emotion,
-            "emotion_intensity": s.emotion_intensity,
-            "safety_flag": s.safety_flag,
-            "severity": severity,
-            "is_positive_log": s.problem_category == "正向紀錄",
-            "problem_category": s.problem_category,
-            "confounders": list(s.confounders) if s.confounders else None,
-            "parent_goal": s.parent_goal,
-            "goal_aligned": None,
-            "linked_plan_id": s.linked_plan_id,
-        }
-
-    @staticmethod
-    def _situation_dict(
-        source: dict[str, Any], *, round_no: int, history: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        """核心輸入情境(cores/README 輸入契約;嚴格隔離:無 linked_plan、無卡文)。"""
-        return {
-            "mode": source["mode"],
-            "age_band": source["age_band"],
-            "facts": source["facts"],
-            "emotion": source["emotion"],
-            "emotion_intensity": source["emotion_intensity"],
-            "safety_flag": bool(source.get("safety_flag")),
-            "problem_category": source.get("problem_category"),
-            "confounders": source.get("confounders"),
-            "parent_goal": source.get("parent_goal"),
-            "round_no": round_no,
-            "history": history,
-        }
-
-    @staticmethod
-    def _payload(situation: dict[str, Any]) -> str:
-        payload = json.dumps(situation, ensure_ascii=False)
-        assert "linked_plan" not in payload  # 嚴格隔離可斷言(縫補裁決)
-        return payload
+    def _row(session_id: str, child_id: str, mode: str, facts: str, emotion: str,
+             *, stage: str, status: str, severity: str, linked_plan_id: str | None) -> dict[str, Any]:
+        return {"session_id": session_id, "child_id": child_id, "mode": mode,
+                "stage": stage, "status": status, "facts": facts, "emotion": emotion,
+                "severity": severity, "linked_plan_id": linked_plan_id}

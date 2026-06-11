@@ -1,10 +1,14 @@
 """PG 持久層 + 不變量(FSM 第二道防線)。
 
-不變量(spec v2.2「雙保險」):
+不變量(spec v3.0 資料模型,承 v2.2「雙保險」):
   rounds PK (session_id, round_no)        → 重複輪次寫入必失敗
   round_no 由 server 取 max(round_no)+1   → client 無法指定輪次
   records UNIQUE(session_id)              → 一 session 至多一 record
   status 以 UPDATE ... WHERE status='open' 條件式轉移 → 併發雙 finalize 恰一成功
+
+v3.0 差異:sessions 多 stage(FSM 細分);① 先建 session、② 才補軸,
+故 age_band / emotion_intensity 可為 NULL;rounds 無卡(card 可 NULL);
+records 多 draft / claimed_sources(schema_version=2,見 record-schema.md)。
 
 MemoryDatabase 以同語意實作,供驗收測試 hermetic 執行;
 PG 真不變量由 DDL + PgDatabase 承載(TEST_DATABASE_URL 可跑同一套測試)。
@@ -22,7 +26,7 @@ class UniqueViolation(Exception):
 
 
 SESSION_COLUMNS: tuple[str, ...] = (
-    "session_id", "child_id", "mode", "status", "age_band", "facts", "emotion",
+    "session_id", "child_id", "mode", "status", "stage", "age_band", "facts", "emotion",
     "emotion_intensity", "safety_flag", "severity", "is_positive_log",
     "problem_category", "confounders", "parent_goal", "goal_aligned", "linked_plan_id",
 )
@@ -30,6 +34,7 @@ SESSION_COLUMNS: tuple[str, ...] = (
 RECORD_COLUMNS: tuple[str, ...] = (
     "record_id", "session_id", "schema_version", "status", "linked_plan_id",
     "dreikurs_purpose", "maslow_need", "erikson_stage", "piaget_stage", "dev_normative",
+    "claimed_sources", "draft",
     "outcome", "outcome_note", "parent_self_note", "followup", "tools_used", "posture",
 )
 
@@ -39,11 +44,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     child_id          TEXT NOT NULL,
     mode              TEXT NOT NULL,
     status            TEXT NOT NULL,
+    stage             TEXT,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    age_band          TEXT NOT NULL,
+    age_band          TEXT,
     facts             TEXT NOT NULL,
     emotion           TEXT NOT NULL,
-    emotion_intensity TEXT NOT NULL,
+    emotion_intensity TEXT,
     safety_flag       BOOLEAN DEFAULT false,
     severity          TEXT,
     is_positive_log   BOOLEAN DEFAULT false,
@@ -59,7 +65,7 @@ CREATE TABLE IF NOT EXISTS rounds (
     round_no        INT NOT NULL,
     child_reaction  TEXT,
     reaction_note   TEXT,
-    card            JSONB NOT NULL,
+    card            JSONB,
     core_outputs    JSONB NOT NULL,
     synthesis_trace JSONB NOT NULL,
     degraded        BOOLEAN DEFAULT false,
@@ -70,7 +76,7 @@ CREATE TABLE IF NOT EXISTS rounds (
 CREATE TABLE IF NOT EXISTS records (
     record_id        TEXT PRIMARY KEY,
     session_id       TEXT UNIQUE REFERENCES sessions(session_id),
-    schema_version   INT NOT NULL DEFAULT 1,
+    schema_version   INT NOT NULL DEFAULT 2,
     status           TEXT NOT NULL,
     linked_plan_id   TEXT,
     dreikurs_purpose TEXT,
@@ -78,6 +84,8 @@ CREATE TABLE IF NOT EXISTS records (
     erikson_stage    TEXT,
     piaget_stage     TEXT,
     dev_normative    BOOLEAN,
+    claimed_sources  JSONB,
+    draft            TEXT,
     outcome          TEXT NOT NULL,
     outcome_note     TEXT,
     parent_self_note TEXT,
@@ -88,6 +96,20 @@ CREATE TABLE IF NOT EXISTS records (
 );
 """
 
+# v2.2 → v3.0 既有資料庫升級(冪等;migration 0002 與 ensure_schema 共用,單一來源)。
+# 0001 動態 import 本檔 DDL,全新庫在 0001 即得 v3 形狀,本塊必須可 no-op。
+DDL_MIGRATE = """
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS stage TEXT;
+ALTER TABLE sessions ALTER COLUMN age_band DROP NOT NULL;
+ALTER TABLE sessions ALTER COLUMN emotion_intensity DROP NOT NULL;
+ALTER TABLE rounds ALTER COLUMN card DROP NOT NULL;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS claimed_sources JSONB;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS draft TEXT;
+ALTER TABLE records ALTER COLUMN schema_version SET DEFAULT 2;
+UPDATE sessions SET stage = CASE status WHEN 'open' THEN 'ready' ELSE status END
+WHERE stage IS NULL;
+"""
+
 
 class Database(Protocol):
     async def create_session(self, row: dict[str, Any]) -> None: ...
@@ -95,7 +117,7 @@ class Database(Protocol):
     async def update_session(self, session_id: str, fields: dict[str, Any]) -> None: ...
     async def insert_round(
         self, session_id: str, *, child_reaction: str | None, reaction_note: str | None,
-        card: dict[str, Any], core_outputs: dict[str, Any], synthesis_trace: dict[str, Any],
+        card: dict[str, Any] | None, core_outputs: dict[str, Any], synthesis_trace: dict[str, Any],
         degraded: bool,
     ) -> int: ...
     async def get_rounds(self, session_id: str) -> list[dict[str, Any]]: ...
@@ -132,11 +154,12 @@ class MemoryDatabase:
 
     async def update_session(self, session_id: str, fields: dict[str, Any]) -> None:
         async with self._lock:
-            self._sessions[session_id].update(fields)
+            safe = {k: v for k, v in fields.items() if k in SESSION_COLUMNS and k != "session_id"}
+            self._sessions[session_id].update(safe)  # 與 PgDatabase 同白名單語意
 
     async def insert_round(
         self, session_id: str, *, child_reaction: str | None, reaction_note: str | None,
-        card: dict[str, Any], core_outputs: dict[str, Any], synthesis_trace: dict[str, Any],
+        card: dict[str, Any] | None, core_outputs: dict[str, Any], synthesis_trace: dict[str, Any],
         degraded: bool,
     ) -> int:
         async with self._lock:
@@ -201,6 +224,7 @@ class PgDatabase:
     async def ensure_schema(self) -> None:
         async with self._pool.connection() as conn:
             await conn.execute(DDL)
+            await conn.execute(DDL_MIGRATE)  # 既有 v2.2 庫直接開機也補齊 v3 欄位
 
     @staticmethod
     def _jsonb(value: Any) -> Any:
@@ -242,7 +266,7 @@ class PgDatabase:
 
     async def insert_round(
         self, session_id: str, *, child_reaction: str | None, reaction_note: str | None,
-        card: dict[str, Any], core_outputs: dict[str, Any], synthesis_trace: dict[str, Any],
+        card: dict[str, Any] | None, core_outputs: dict[str, Any], synthesis_trace: dict[str, Any],
         degraded: bool,
     ) -> int:
         async with self._pool.connection() as conn:
@@ -307,7 +331,7 @@ class PgDatabase:
             ph=sql.SQL(", ").join(sql.Placeholder() for _ in RECORD_COLUMNS),
         )
         values: list[Any] = [record_row.get(c) for c in RECORD_COLUMNS]
-        for jcol in ("maslow_need", "tools_used"):
+        for jcol in ("maslow_need", "tools_used", "claimed_sources"):
             values[RECORD_COLUMNS.index(jcol)] = self._jsonb(record_row.get(jcol))
 
         async with self._pool.connection() as conn:
