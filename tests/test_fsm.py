@@ -112,6 +112,18 @@ async def test_terminal_finalized_absorbs(client: Client) -> None:
             await client.call_tool(tool, args)
 
 
+async def test_finalize_requires_core_tags_round(client: Client) -> None:
+    """#3:stage=ready 但 0 rounds → ④ 擋下(學派引導不可整段繞過);跑過 ③ 即放行。"""
+    sid = await ready_session(client)
+    with pytest.raises(ToolError, match="E_INVALID_STATE"):
+        await client.call_tool("finalize", {"session_id": sid, "outcome": "resolved", "draft": "好。"})
+    await client.call_tool("core_tags", {"session_id": sid})
+    r = data_of(await client.call_tool("finalize", {
+        "session_id": sid, "outcome": "resolved", "draft": "我們一起想辦法。"}))
+    assert "record_id" in r
+    # short 模式無 rounds 仍可 finalize:test_gates.test_positive_skip_short_chain 覆蓋
+
+
 async def test_invalid_link(client: Client) -> None:
     """linked_plan_id 須指向存在且 planned 的 record(承 v2.2 A2)。"""
     with pytest.raises(ToolError, match="E_INVALID_LINK"):

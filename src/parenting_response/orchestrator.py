@@ -72,11 +72,14 @@ class Orchestrator:
         if not facts or not emotion or mode not in MODES:
             raise PRError(E_MISSING_AXIS, "① 必要:facts / emotion / mode(live|rehearsal)")
 
-        # linked_plan 守衛(承 v2.2 A2):須指向存在且 status=planned 的 record。
+        # linked_plan 守衛(承 v2.2 A2):須指向存在且 status=planned 的 record;
+        # outcome 驗證為縱深防禦,兼擋 v1 遺留之 planned+escalated 列(紅旗案不可引用)。
         if linked_plan_id is not None:
             rec = await self.db.get_record(linked_plan_id)
-            if rec is None or rec.get("status") != "planned":
-                raise PRError(E_INVALID_LINK, f"linked_plan_id={linked_plan_id} 不存在或非 planned")
+            if (rec is None or rec.get("status") != "planned"
+                    or rec.get("outcome") == "escalated_to_redflag"):
+                raise PRError(E_INVALID_LINK,
+                              f"linked_plan_id={linked_plan_id} 不存在、非 planned 或為紅旗案")
 
         session_id = uuid.uuid4().hex
 
@@ -155,7 +158,12 @@ class Orchestrator:
         else:  # 乒乓輪需 reaction
             if child_reaction not in CHILD_REACTIONS:
                 raise PRError(E_INVALID_STATE, f"child_reaction 須 ∈ 六類:{child_reaction}")
-            rf = check_shortcircuit(reaction_note if reaction_note else child_reaction)  # G0 複檢
+            # 高張力輪強制轉述(硬閘,與 ② script_decision 同型):紅旗複檢的風險
+            # 集中在高張力輪,G0 有效性不可繫於 host 自律;非高張力無轉述 → 跳過複檢(已知軟點)。
+            if child_reaction in _HIGH_TENSION_REACTIONS and not reaction_note:
+                return {"requires": "reaction_note",
+                        "ask": "孩子有情緒爆發/退縮反應,請轉述他實際說了什麼或做了什麼(G0 複檢需要)"}
+            rf = check_shortcircuit(reaction_note)  # G0 複檢(None-safe;高張力輪必有轉述)
             if rf is not None:
                 await self._escalate(session_id, s, rf)
                 return {"redflag": rf.model_dump(), "referral": rf.referral, "card": None}
@@ -167,8 +175,8 @@ class Orchestrator:
         if round_no > 0 and child_reaction is not None:
             primary = REACTION_PRIMARY[child_reaction]
 
-        prev_reaction = rounds[-1].get("child_reaction") if rounds else None
-        converged = self._converged(child_reaction, round_no, prev_reaction, warning_hit)
+        prior_reactions: list[str | None] = [r.get("child_reaction") for r in rounds]
+        converged = self._converged(child_reaction, round_no, prior_reactions, warning_hit)
 
         band = str(s["age_band"])
         stages = {"erikson": ERIKSON_BY_BAND[band],  # 確定性查表,不經 LLM
@@ -203,6 +211,15 @@ class Orchestrator:
             if unknown:
                 raise PRError(E_INVALID_STATE, f"maslow_need 須 ⊆ 缺損四層:{unknown}")
 
+        # G0 複檢(④ 四個自由文本;承「每個入口都是檢查點」)。短路命中不拒收、
+        # 不改走 redflag_stopped——④ 紅旗主體多為家長自陳而非進行中乒乓,鎖案無助益;
+        # 轉介必達 + severity 標記供 L0 追蹤。命中即落 severity,不因後續拒收而無聲。
+        rf = check_shortcircuit(draft, outcome_note, parent_self_note, followup)
+        warnings = check_warning(draft, outcome_note, parent_self_note, followup)
+        if rf is not None or warnings:
+            await self.db.update_session(
+                session_id, {"severity": self._raise(s.get("severity"), "高")})
+
         short = s["stage"] == "short_pending"
         if short:
             if draft is not None:
@@ -210,12 +227,19 @@ class Orchestrator:
         else:
             if s["stage"] != "ready":
                 raise PRError(E_INVALID_STATE, f"stage={s['stage']} 不可 finalize")
+            rounds = await self.db.get_rounds(session_id)
+            if not rounds:  # FSM:core_tags → finalize;不取 TAG 不得交稿
+                raise PRError(E_INVALID_STATE, "一般模式須先 ③ core_tags 至少一輪(round 0 起手)")
             if draft is None:
                 raise PRError(E_INVALID_STATE, "一般模式須交 draft(host 草稿過後檢才落庫)")
             violations = self._pattern_check(draft)  # 禁用詞 code 後檢
             if violations:
-                return {"rejected": True, "violations": violations,
-                        "hint": "draft 含禁用詞,請重生後重交(不落庫)"}
+                rejected: dict[str, Any] = {"rejected": True, "violations": violations,
+                                            "hint": "draft 含禁用詞,請重生後重交(不落庫)"}
+                if rf is not None:  # G0 訊號不因拒收而丟失
+                    rejected["redflag"] = rf.model_dump()
+                    rejected["referral"] = rf.referral
+                return rejected
 
         record = await self._build_record(s, outcome, draft, claimed_sources, maslow_need,
                                           outcome_note, parent_self_note, followup)
@@ -225,7 +249,13 @@ class Orchestrator:
         )
         if not ok:
             raise PRError(E_INVALID_STATE, "session 已非 open(併發 finalize 恰一成功)")
-        return {"record_id": record["record_id"]}
+        result: dict[str, Any] = {"record_id": record["record_id"]}
+        if rf is not None:
+            result["redflag"] = rf.model_dump()
+            result["referral"] = rf.referral
+        elif warnings:
+            result["warnings"] = warnings
+        return result
 
     # ── 共用守衛 / 終態 ───────────────────────────────────────────
 
@@ -278,7 +308,9 @@ class Orchestrator:
     ) -> dict[str, Any]:
         band = s.get("age_band")
         linked = s.get("linked_plan_id")
-        if str(s["mode"]) == "rehearsal":
+        if outcome == "escalated_to_redflag":
+            status = "stopped"  # 紅旗案非可執行計畫,不進任何 promotion 推導
+        elif str(s["mode"]) == "rehearsal":
             status = "planned"
         elif linked:
             status = "done_from_plan"
@@ -338,16 +370,25 @@ class Orchestrator:
 
     @staticmethod
     def _converged(
-        child_reaction: str | None, round_no: int, prev_reaction: Any, warning_hit: bool,
+        child_reaction: str | None, round_no: int,
+        prior_reactions: list[str | None], warning_hit: bool,
     ) -> bool:
-        """D3 投影(零 LLM):鬆動配合 ∧ 無警訊 ∧ 前一輪非高張力。
+        """D3 投影(零 LLM;單一來源 = spec v3.0「converged 判定表」):
+        鬆動配合 ∧ 無警訊 ∧ 自最近一次高張力反應後已有 ≥1 輪鬆動配合。
 
-        高張力(情緒爆發/退縮害怕)後的第一個鬆動配合 → False(討好式順從防線),
-        連續第二輪鬆動配合 → True;round 0 恆 False。
+        高張力(情緒爆發/退縮害怕)與鬆動之間夾其他反應**不重置**防線——
+        討好式順從常見軌跡「爆發→嘴硬→順從」不得洗白;無高張力史 → 首個鬆動
+        即 True;round 0 恆 False。
         """
         if round_no == 0 or child_reaction != "鬆動配合" or warning_hit:
             return False
-        return str(prev_reaction or "") not in _HIGH_TENSION_REACTIONS
+        eased = 0
+        for prev in reversed(prior_reactions):  # 反向掃描至最近一次高張力
+            if prev == "鬆動配合":
+                eased += 1
+            elif str(prev or "") in _HIGH_TENSION_REACTIONS:
+                return eased >= 1
+        return True  # 無高張力史
 
     # ── 推導與工具 ────────────────────────────────────────────────
 

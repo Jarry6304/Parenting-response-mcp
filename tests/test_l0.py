@@ -6,7 +6,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import pytest
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 
 from conftest import constraints_args, data_of, open_session, prereq_args, ready_session
 from parenting_response.db import MemoryDatabase
@@ -72,6 +74,29 @@ async def test_promotion_chain_done_from_plan(client: Client, db: MemoryDatabase
     assert rec2["linked_plan_id"] == plan["record_id"]
 
 
+async def test_redflag_record_excluded_from_promotion(client: Client, db: MemoryDatabase) -> None:
+    """#1:rehearsal 紅旗自動收案 → record.status=stopped,① 引用一律 E_INVALID_LINK。"""
+    sid = await open_session(client, mode="rehearsal")
+    await client.call_tool("prerequisites", prereq_args(sid))
+    await client.call_tool("core_tags", {"session_id": sid})
+    r = data_of(await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": "情緒爆發", "reaction_note": "他撞牆說想消失"}))
+    assert r["redflag"]["hit"] is True
+    rec = await db.get_record_by_session(sid)
+    assert rec is not None
+    assert rec["status"] == "stopped" and rec["outcome"] == "escalated_to_redflag"
+    with pytest.raises(ToolError, match="E_INVALID_LINK"):
+        await client.call_tool("constraints", constraints_args(linked_plan_id=rec["record_id"]))
+
+
+async def test_legacy_planned_escalated_record_blocked(client: Client, db: MemoryDatabase) -> None:
+    """#1 縱深:v1 遺留列(status=planned ∧ outcome=escalated)由 outcome 防線擋。"""
+    db._records["LEGACY-01"] = {"record_id": "LEGACY-01", "status": "planned",
+                                "outcome": "escalated_to_redflag"}
+    with pytest.raises(ToolError, match="E_INVALID_LINK"):
+        await client.call_tool("constraints", constraints_args(linked_plan_id="LEGACY-01"))
+
+
 async def _react(client: Client, sid: str, reaction: str, note: str | None = None) -> bool:
     r = data_of(await client.call_tool("core_tags", {
         "session_id": sid, "child_reaction": reaction, "reaction_note": note}))
@@ -91,20 +116,43 @@ async def test_converged_rules(client: Client) -> None:
     # 高張力(情緒爆發)後第一個鬆動 = False(討好式順從防線);連續第二輪 = True
     sid2 = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid2})
-    assert await _react(client, sid2, "情緒爆發") is False
+    assert await _react(client, sid2, "情緒爆發", "大哭摔積木") is False
     assert await _react(client, sid2, "鬆動配合") is False
     assert await _react(client, sid2, "鬆動配合") is True
 
     # 退縮害怕同屬高張力
     sid3 = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid3})
-    assert await _react(client, sid3, "退縮害怕") is False
+    assert await _react(client, sid3, "退縮害怕", "低頭不說話一直發抖") is False
     assert await _react(client, sid3, "鬆動配合") is False
 
     # 警訊詞阻斷收斂(配合但語境危險 ≠ 收斂)
     sid4 = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid4})
     assert await _react(client, sid4, "鬆動配合", "他配合了,但我剛才罵他欠揍") is False
+
+
+# spec v3.0 converged 判定表(defect-fixes #5;字面複寫,守 code 投影不漂移)
+CONVERGED_TABLE: list[tuple[list[str], bool]] = [
+    (["鬆動配合"], True),                                          # 無高張力史
+    (["情緒爆發", "鬆動配合"], False),                              # 高張力後第一個鬆動
+    (["情緒爆發", "鬆動配合", "鬆動配合"], True),                    # 連續第二輪
+    (["情緒爆發", "否認堅持", "鬆動配合"], False),                   # 夾一輪不洗白(本次修正點)
+    (["情緒爆發", "否認堅持", "鬆動配合", "鬆動配合"], True),
+]
+
+
+async def test_converged_decision_table(client: Client) -> None:
+    """#5:converged 以最近一次高張力為錨點,逐列驗 spec 判定表。"""
+    for seq, expected in CONVERGED_TABLE:
+        sid = await ready_session(client)
+        await client.call_tool("core_tags", {"session_id": sid})
+        last: dict[str, Any] | None = None
+        for reaction in seq:
+            note = "大哭摔積木" if reaction in {"情緒爆發", "退縮害怕"} else None
+            last = data_of(await client.call_tool("core_tags", {
+                "session_id": sid, "child_reaction": reaction, "reaction_note": note}))
+        assert last is not None and last["converged"] is expected, seq
 
 
 async def test_severity_monotonic_raises(client: Client, db: MemoryDatabase) -> None:

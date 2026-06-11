@@ -70,6 +70,35 @@ async def test_reaction_warning_raises_severity(client: Client, db: MemoryDataba
     assert db._sessions[sid]["status"] == "open"  # 警訊不停案
 
 
+async def test_high_tension_round_requires_note(client: Client, db: MemoryDatabase) -> None:
+    """#4:高張力輪缺 reaction_note → ask-gate(不 insert round);補 note 含短路詞 → escalate。"""
+    sid = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid})
+    r = data_of(await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": "情緒爆發"}))
+    assert r["requires"] == "reaction_note"
+    assert len(await db.get_rounds(sid)) == 1  # ask-gate 不落輪
+    r2 = data_of(await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": "情緒爆發", "reaction_note": "他說他不想活了"}))
+    assert r2["redflag"]["hit"] is True
+    assert db._sessions[sid]["status"] == "redflag_stopped"
+
+    sid2 = await ready_session(client)  # 退縮害怕同屬高張力
+    await client.call_tool("core_tags", {"session_id": sid2})
+    r3 = data_of(await client.call_tool("core_tags", {
+        "session_id": sid2, "child_reaction": "退縮害怕"}))
+    assert r3["requires"] == "reaction_note"
+
+
+async def test_non_high_tension_note_optional(client: Client) -> None:
+    """#4:非高張力輪不強制轉述(無 note 照常回 TAG;已知軟點,文件如實陳述)。"""
+    sid = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid})
+    r = data_of(await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": "否認堅持"}))
+    assert len(r["response_tags"]) == 6
+
+
 async def test_positive_log_ask_gate(client: Client) -> None:
     """驗收5:正向紀錄缺 script_decision → ask-gate,③④ 不解鎖。"""
     sid = await open_session(client, facts="他今天主動把碗收到水槽", emotion="開心")
@@ -132,6 +161,72 @@ async def test_pattern_check_rejects_then_accepts(client: Client, db: MemoryData
         "claimed_sources": ["gottman", "pd"],
     }))
     assert "record_id" in r2
+
+
+async def test_finalize_selfnote_shortcircuit_referral(client: Client, db: MemoryDatabase) -> None:
+    """#2:④ parent_self_note 含短路詞 → 案照收,但轉介必達 + severity 高。"""
+    sid = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid})
+    r = data_of(await client.call_tool("finalize", {
+        "session_id": sid, "outcome": "partial",
+        "draft": "我看到你很生氣,我們先深呼吸。",
+        "parent_self_note": "我快忍不住打他了,怕自己傷害孩子",
+    }))
+    assert "record_id" in r
+    assert r["redflag"]["hit"] is True and "113" in r["referral"]
+    s = db._sessions[sid]
+    assert s["severity"] == "高" and s["status"] == "finalized"  # 不拒收、不改 redflag_stopped
+    assert await db.get_record_by_session(sid) is not None
+
+
+async def test_short_finalize_g0_not_skipped(client: Client, db: MemoryDatabase) -> None:
+    """#2:short 只略過 pattern_check,不略過 G0。"""
+    sid = await open_session(client, facts="他今天主動把碗收到水槽", emotion="開心")
+    await client.call_tool("prerequisites", prereq_args(
+        sid, problem_category="正向紀錄", emotion_intensity="低", script_decision="skip"))
+    r = data_of(await client.call_tool("finalize", {
+        "session_id": sid, "outcome": "resolved",
+        "outcome_note": "他說最近想消失,我很擔心",
+    }))
+    assert "record_id" in r
+    assert r["redflag"]["hit"] is True and "113" in r["referral"]
+    assert db._sessions[sid]["severity"] == "高"
+
+
+async def test_finalize_followup_warning(client: Client, db: MemoryDatabase) -> None:
+    """#2:followup 含警訊詞 → severity 高 + 回傳 warnings。"""
+    sid = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid})
+    r = data_of(await client.call_tool("finalize", {
+        "session_id": sid, "outcome": "partial", "draft": "我們一起想辦法。",
+        "followup": "下次他再鬧我想罰跪處理",
+    }))
+    assert "record_id" in r and "redflag" not in r
+    assert any("罰跪" in w for w in r["warnings"])
+    assert db._sessions[sid]["severity"] == "高"
+
+
+async def test_finalize_clean_shape_unchanged(client: Client) -> None:
+    """#2:全文本乾淨 → 回傳形狀不變(回溯相容)。"""
+    sid = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid})
+    r = data_of(await client.call_tool("finalize", {
+        "session_id": sid, "outcome": "resolved", "draft": "我們一起想辦法。"}))
+    assert set(r) == {"record_id"}
+
+
+async def test_pattern_reject_keeps_g0_signal(client: Client, db: MemoryDatabase) -> None:
+    """#2:draft 踩 pattern 被拒收時,G0 訊號不丟——severity 已落、回應附轉介。"""
+    sid = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid})
+    r = data_of(await client.call_tool("finalize", {
+        "session_id": sid, "outcome": "partial",
+        "draft": "你就是講不聽。",
+        "parent_self_note": "我已經失手打過他一次",
+    }))
+    assert r["rejected"] is True and "113" in r["referral"]
+    s = db._sessions[sid]
+    assert s["severity"] == "高" and s["status"] == "open"  # 拒收不落庫,但不無聲
 
 
 async def test_normal_finalize_requires_draft(client: Client) -> None:
