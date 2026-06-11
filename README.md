@@ -15,6 +15,7 @@
 
 - 終態 `finalized` / `redflag_stopped` 為吸收態;G0 警訊級不停案但 severity 升「高」(單調只升)。
 - 棄案 TTL:open 案自最後活動逾 `SESSION_TTL_DAYS`(預設 30)天,下次 ① 懶清掃轉吸收態 `expired`(無 record;severity 留存供追蹤)。
+- 稽核證據鏈:G0 命中(兩級)與 ④ 拒收一律落 `events`(欄位/詞組/節錄/轉介送達;kind 契約見 `references/record-schema.md`)。
 - `converged` 為 code 規則(D3):討好式順從 ≠ 收斂——自最近一次高張力(情緒爆發/退縮害怕)後需 ≥1 輪鬆動配合才收斂,夾其他反應不重置(判定表見 spec v3.0)。
 - promotion 鏈:rehearsal 收案得 `record_id` → live 以 `linked_plan_id` 引用 → 自動 `done_from_plan`;紅旗案 record(`status=stopped`)不可引用(`E_INVALID_LINK`)。
 - ④ 可附 `claimed_sources`(⊆ 6 回應核心,軟溯源)與 `maslow_need`(⊆ 缺損四層,① 探點命中之回報);host 負責 S1 探詢、以 primary 領銜耦合、把實際草稿交回後檢。

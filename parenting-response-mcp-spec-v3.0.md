@@ -79,6 +79,7 @@ stateDiagram-v2
 - **④ G0(defect-fixes #2):** `draft / outcome_note / parent_self_note / followup` 一律複檢(short 模式同樣適用,short 只略過 pattern_check);短路命中**不拒收、不改走 redflag_stopped**——④ 紅旗主體多為家長自陳而非進行中乒乓,鎖案無助益;回傳附 `redflag`/`referral` 且 severity 升「高」(警訊級 → 附 `warnings` + severity 升「高」;G0 訊號不因 pattern 拒收而丟失)。
 - **④ 前置(defect-fixes #3):** 一般模式須先 ③ `core_tags` 至少一輪(round 0 起手),否則 `E_INVALID_STATE`——host 未取得任何 TAG 不得交稿,學派引導不可整段繞過;short 模式本就免 ③,不受此守衛影響。
 - **棄案 TTL(defect-fixes #6):** open 案自**最後活動**(建案或最近一輪,非單看建案時間——乒乓本就跨日)逾 `SESSION_TTL_DAYS`(預設 30,≤0 停用)天,於下次 ① 懶清掃轉吸收態 `expired`:不產 record、`severity` 留存於 sessions 供 L0 追蹤(警訊訊號不隨棄案消失)。
+- **稽核事件(defect-fixes #7/#8):** G0 命中(兩級,①③④)與 ④ pattern 拒收一律落 `events`(append-only):短路記欄位/詞組/前後文節錄/`referral_delivered`,警訊記 (欄位, 詞組) 列,拒收記 violations 與嘗試之 outcome——`severity=高` 與拒收重試皆可重建緣由。「曾接觸紅旗之案」= `events.kind=g0_shortcircuit` ∪ `outcome=escalated_to_redflag`(④ 命中不拒收的列 record 外觀正常,證據在 events)。欄位契約見 `record-schema.md`。
 - 違序呼叫明確錯誤,**零 server 成本**。
 
 ## 學派 TAG 設計（Approach 1,locked;詳見 `references/cores/tags.md`）
@@ -127,7 +128,7 @@ stateDiagram-v2
 
 | 保證 | 強度 | 機制 |
 |---|---|---|
-| G0 紅旗（短路自傷/虐待 → 轉介;警訊 → severity↑） | **硬（code）** | ① 輸入 + ③ 每輪 reaction + ④ 四個自由文本(④ 命中不拒收:轉介必達 + severity↑) |
+| G0 紅旗（短路自傷/虐待 → 轉介;警訊 → severity↑） | **硬（code）** | ① 輸入 + ③ 每輪 reaction + ④ 四個自由文本(④ 命中不拒收:轉介必達 + severity↑);命中一律 `events` 稽核落庫 |
 | 必填軸 / 正向紀錄 `script_decision` 閘 | **硬（code）** | ②；缺則不解鎖 |
 | 禁用詞 `pattern_check` | **硬（code）** | ④ 落庫前;不過拒收 |
 | FSM 序 / DB 不變量 / Erikson-Piaget / `converged` / 反應強調映射 | **硬（code）** | server 端 |

@@ -84,3 +84,7 @@ class Redflag(BaseModel):
     hit: bool
     reason: str
     referral: str
+    # 證據鏈(defect-fixes #8):命中欄位 / 詞組 / 前後文節錄(events 同步落庫,可重建緣由)
+    field: str | None = None
+    phrase: str | None = None
+    excerpt: str | None = None

@@ -39,6 +39,19 @@ RECORD_COLUMNS: tuple[str, ...] = (
     "outcome", "outcome_note", "parent_self_note", "followup", "tools_used", "posture",
 )
 
+# 稽核事件(append-only;defect-fixes #7/#8):G0 命中(兩級)與 ④ pattern 拒收
+# 一律落庫——severity 與拒收皆可重建緣由;0003 遷移與 ensure_schema 共用,單一來源。
+DDL_EVENTS = """
+CREATE TABLE IF NOT EXISTS events (
+    event_id   BIGSERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(session_id),
+    kind       TEXT NOT NULL,
+    payload    JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS events_session_idx ON events (session_id);
+"""
+
 DDL = """
 CREATE TABLE IF NOT EXISTS sessions (
     session_id        TEXT PRIMARY KEY,
@@ -95,7 +108,7 @@ CREATE TABLE IF NOT EXISTS records (
     posture          TEXT,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-"""
+""" + DDL_EVENTS
 
 # v2.2 → v3.0 既有資料庫升級(冪等;migration 0002 與 ensure_schema 共用,單一來源)。
 # 0001 動態 import 本檔 DDL,全新庫在 0001 即得 v3 形狀,本塊必須可 no-op。
@@ -126,6 +139,8 @@ class Database(Protocol):
     async def get_record_by_session(self, session_id: str) -> dict[str, Any] | None: ...
     async def count_records_with_prefix(self, prefix: str) -> int: ...
     async def expire_stale_sessions(self, cutoff: _dt.datetime) -> int: ...
+    async def log_event(self, session_id: str, kind: str, payload: dict[str, Any]) -> None: ...
+    async def get_events(self, session_id: str) -> list[dict[str, Any]]: ...
     async def finalize_tx(
         self, session_id: str, *, terminal_status: str,
         session_updates: dict[str, Any], record_row: dict[str, Any],
@@ -141,6 +156,7 @@ class MemoryDatabase:
         self._rounds: dict[str, list[dict[str, Any]]] = {}
         self._records: dict[str, dict[str, Any]] = {}
         self._records_by_session: dict[str, str] = {}
+        self._events: list[dict[str, Any]] = []
 
     async def create_session(self, row: dict[str, Any]) -> None:
         async with self._lock:
@@ -205,6 +221,17 @@ class MemoryDatabase:
                 s["stage"] = "expired"
                 n += 1
             return n
+
+    async def log_event(self, session_id: str, kind: str, payload: dict[str, Any]) -> None:
+        async with self._lock:
+            self._events.append({
+                "event_id": len(self._events) + 1, "session_id": session_id,
+                "kind": kind, "payload": dict(payload),
+                "created_at": _dt.datetime.now(_dt.timezone.utc),
+            })
+
+    async def get_events(self, session_id: str) -> list[dict[str, Any]]:
+        return [dict(e) for e in self._events if e["session_id"] == session_id]
 
     async def finalize_tx(
         self, session_id: str, *, terminal_status: str,
@@ -342,6 +369,20 @@ class PgDatabase:
                 (cutoff, cutoff),
             )
             return cur.rowcount
+
+    async def log_event(self, session_id: str, kind: str, payload: dict[str, Any]) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO events (session_id, kind, payload) VALUES (%s, %s, %s)",
+                (session_id, kind, self._jsonb(payload)),
+            )
+
+    async def get_events(self, session_id: str) -> list[dict[str, Any]]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT * FROM events WHERE session_id = %s ORDER BY event_id", (session_id,)
+            )
+            return await self._fetchall_dicts(cur)
 
     async def finalize_tx(
         self, session_id: str, *, terminal_status: str,

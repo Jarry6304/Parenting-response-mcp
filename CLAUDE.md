@@ -23,7 +23,7 @@ uv run alembic upgrade head   # 需 DATABASE_URL(0002 冪等,既有庫可直升)
 
 - **零 LLM**:server 端無 LLM client 物件(測試斷言);耦合生成是 host 的事。**禁止引入 anthropic / 任何 LLM SDK**。
 - FSM stage 守衛:`① constraints → ② prerequisites → ③ core_tags* → ④ finalize`,違序一律 `E_INVALID_STATE`;吸收態三個:終態 `finalized`/`redflag_stopped` + 棄案 `expired`(僅 ① TTL 懶清掃產生,錨定最後活動;無 record、severity 留存)。
-- G0 先於一切:① 短路 → 轉介鎖死;③ 複檢(高張力輪強制 `reaction_note`,缺則 ask-gate;其餘輪有轉述才檢),命中 → 自動收案 `escalated_to_redflag`(record `status=stopped`,不進 promotion 鏈);④ 四個自由文本複檢(短路不拒收:轉介必達 + severity↑);警訊級 → severity 升「高」(單調只升)。
+- G0 先於一切:① 短路 → 轉介鎖死;③ 複檢(高張力輪強制 `reaction_note`,缺則 ask-gate;其餘輪有轉述才檢),命中 → 自動收案 `escalated_to_redflag`(record `status=stopped`,不進 promotion 鏈);④ 四個自由文本複檢(短路不拒收:轉介必達 + severity↑);警訊級 → severity 升「高」(單調只升)。G0 命中與 ④ 拒收一律 `log_event` 落 `events` 稽核(欄位/詞組/節錄;契約歸 record-schema.md)。
 - 正向紀錄硬閘:缺 `script_decision` 不解鎖;skip 走 short ④(`draft=NULL`,不跑 `pattern_check`);一般 ④ 須先 ③ 至少一輪、必有 draft 且過禁用詞檢才落庫。
 - 終態寫入一律走 `db.finalize_tx`(條件式 `WHERE status='open'` + records UNIQUE);不要繞過。
 - ① 約束集 = 8 校紅線聯集 ∪ wordlists 禁用詞 pattern;探詢核心(maslow/satir)只進 ①,不進 ③ 耦合。

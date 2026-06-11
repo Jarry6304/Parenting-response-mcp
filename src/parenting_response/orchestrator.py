@@ -89,23 +89,27 @@ class Orchestrator:
                               f"linked_plan_id={linked_plan_id} 不存在、非 planned 或為紅旗案")
 
         session_id = uuid.uuid4().hex
+        labeled = (("facts", facts), ("emotion", emotion))
 
-        rf = check_shortcircuit(facts, emotion)  # G0 短路,code,零成本
+        rf = check_shortcircuit(labeled)  # G0 短路,code,零成本
         if rf is not None:
             await self.db.create_session(self._row(
                 session_id, child_id, mode, facts, emotion,
                 stage="redflag_stopped", status="redflag_stopped",
                 severity="高", linked_plan_id=linked_plan_id,
             ))
+            await self._log_g0(session_id, "①", rf=rf, warnings=[])
             return {"session_id": session_id, "redflag": rf.model_dump(),
                     "referral": rf.referral, "card": None}
 
-        warning = check_warning(facts, emotion)
+        warning_hits = check_warning(labeled)
         await self.db.create_session(self._row(
             session_id, child_id, mode, facts, emotion,
             stage="constrained", status="open",
-            severity="高" if warning else "低", linked_plan_id=linked_plan_id,
+            severity="高" if warning_hits else "低", linked_plan_id=linked_plan_id,
         ))
+        if warning_hits:
+            await self._log_g0(session_id, "①", rf=None, warnings=warning_hits)
         return {
             "session_id": session_id,
             "constraints": self._constraint_set(),     # 8 校紅線聯集 ∪ 禁用詞 pattern
@@ -170,13 +174,19 @@ class Orchestrator:
             if child_reaction in _HIGH_TENSION_REACTIONS and not reaction_note:
                 return {"requires": "reaction_note",
                         "ask": "孩子有情緒爆發/退縮反應,請轉述他實際說了什麼或做了什麼(G0 複檢需要)"}
-            rf = check_shortcircuit(reaction_note)  # G0 複檢(None-safe;高張力輪必有轉述)
+            labeled = (("reaction_note", reaction_note),)
+            rf = check_shortcircuit(labeled)  # G0 複檢(None-safe;高張力輪必有轉述)
             if rf is not None:
                 await self._escalate(session_id, s, rf)
+                await self._log_g0(session_id, "③", rf=rf, warnings=[], round_no=round_no)
                 return {"redflag": rf.model_dump(), "referral": rf.referral, "card": None}
-            warning_hit = bool(check_warning(reaction_note))
+            warning_hits = check_warning(labeled)
+            warning_hit = bool(warning_hits)
             if warning_hit and SEVERITY_ORDER[str(s.get("severity") or "低")] < SEVERITY_ORDER["高"]:
                 await self.db.update_session(session_id, {"severity": "高"})  # 單調只升不降
+            if warning_hits:
+                await self._log_g0(session_id, "③", rf=None, warnings=warning_hits,
+                                   round_no=round_no)
 
         primary: tuple[str, ...] = RESPONSE_CORES  # round 0:6 核心全 primary
         if round_no > 0 and child_reaction is not None:
@@ -220,12 +230,16 @@ class Orchestrator:
 
         # G0 複檢(④ 四個自由文本;承「每個入口都是檢查點」)。短路命中不拒收、
         # 不改走 redflag_stopped——④ 紅旗主體多為家長自陳而非進行中乒乓,鎖案無助益;
-        # 轉介必達 + severity 標記供 L0 追蹤。命中即落 severity,不因後續拒收而無聲。
-        rf = check_shortcircuit(draft, outcome_note, parent_self_note, followup)
-        warnings = check_warning(draft, outcome_note, parent_self_note, followup)
-        if rf is not None or warnings:
+        # 轉介必達 + severity 標記供 L0 追蹤。命中即落 severity 與稽核,不因後續拒收而無聲。
+        labeled = (("draft", draft), ("outcome_note", outcome_note),
+                   ("parent_self_note", parent_self_note), ("followup", followup))
+        rf = check_shortcircuit(labeled)
+        warning_hits = check_warning(labeled)
+        warnings = [p for _, p in warning_hits]  # 回傳形狀維持詞組列(回溯相容)
+        if rf is not None or warning_hits:
             await self.db.update_session(
                 session_id, {"severity": self._raise(s.get("severity"), "高")})
+            await self._log_g0(session_id, "④", rf=rf, warnings=warning_hits)
 
         short = s["stage"] == "short_pending"
         if short:
@@ -241,6 +255,11 @@ class Orchestrator:
                 raise PRError(E_INVALID_STATE, "一般模式須交 draft(host 草稿過後檢才落庫)")
             violations = self._pattern_check(draft)  # 禁用詞 code 後檢
             if violations:
+                # 拒收稽核(defect-fixes #7):重試軌跡可考——host 踩了哪些詞、是否屢試
+                await self.db.log_event(session_id, "finalize_rejected", {
+                    "violations": violations, "outcome": outcome,
+                    "redflag_hit": rf is not None,
+                })
                 rejected: dict[str, Any] = {"rejected": True, "violations": violations,
                                             "hint": "draft 含禁用詞,請重生後重交(不落庫)"}
                 if rf is not None:  # G0 訊號不因拒收而丟失
@@ -272,6 +291,28 @@ class Orchestrator:
             raise PRError(E_INVALID_STATE,
                           f"session {session_id} 須在 stage={stage}(實際:{s and s.get('stage')})")
         return s
+
+    async def _log_g0(
+        self, session_id: str, source: str, *, rf: Redflag | None,
+        warnings: list[tuple[str, str]], round_no: int | None = None,
+    ) -> None:
+        """G0 稽核落庫(defect-fixes #7/#8):欄位/詞組/節錄與轉介送達,事後可重建。
+
+        「曾接觸紅旗之案」= events.kind=g0_shortcircuit ∪ outcome=escalated_to_redflag
+        (④ 命中不拒收的列 record 外觀正常,證據只在 events)。
+        """
+        base: dict[str, Any] = {"source": source}
+        if round_no is not None:
+            base["round_no"] = round_no
+        if rf is not None:
+            await self.db.log_event(session_id, "g0_shortcircuit", {
+                **base, "field": rf.field, "phrase": rf.phrase, "excerpt": rf.excerpt,
+                "referral_delivered": True,  # 命中路徑回傳必含 referral(by construction)
+            })
+        if warnings:
+            await self.db.log_event(session_id, "g0_warning", {
+                **base, "hits": [{"field": f, "phrase": p} for f, p in warnings],
+            })
 
     async def _escalate(self, session_id: str, s: dict[str, Any], rf: Redflag) -> None:
         record = await self._build_record(
