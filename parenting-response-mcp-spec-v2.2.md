@@ -367,16 +367,19 @@ pydantic v2                  # tool I/O + 受控詞表 + constraint schema;Liter
 pyright(strict)+ uv          # 補 runtime-only 型別弱點:內部路徑近編譯期檢查;lock 重現環境
 pytest + fastmcp Client      # 20 條驗收:in-memory 直打 tool、mock anthropic → 可斷言「違序 LLM 呼叫 = 0」
 
-src/
+src/parenting_response/   # Python package（src-layout)
 ├── server.py          # FastMCP,3 tools
 ├── orchestrator.py    # FSM 守衛 → G0 → 單波 fan-out → 合成 → 後檢 → 聚合回填（code）
-├── cores/             # 10 核心 system prompt + 呼叫封裝（單波,情境 in）
-├── synthesis.py       # C-輕 合成呼叫 + 貼標
+├── cores/             # registry + prompt 載入（references/cores/*.md 即 runtime 來源）+ 隔離呼叫
+├── synthesis.py       # C-輕 v3:並列排版（洗牌）+ 生成 + 溯源驗證
 ├── postcheck.py       # pattern 檢 + guardian 呼叫 + 重生/降級
-├── redflag.py         # G0 預篩 + next_round 複檢
+├── pingpong.py        # S3 點火路由 + converged 判準（D3）
+├── redflag.py         # G0 預篩 + next_round 複檢（兩級詞表）
 ├── schema.py          # 受控詞表 + constraint + pydantic models + 錯誤碼
-├── db.py              # PG（psycopg3）+ 不變量
-└── migrations/        # Alembic
+├── wordlists.py       # tw-parenting-antipatterns 的 code 投影
+└── db.py              # PG（psycopg3）+ 不變量;Memory 同語意供驗收測試
+migrations/            # Alembic（repo 根）
+tests/                 # 驗收條件測試（in-memory,免 PG / API key）
 references/
 ├── cores/<name>.md            # 各核心 prompt（産招話術 / 約束規則）—已產
 ├── resonance-c-light.md       # 合成契約（v3:隔離並列+溯源）—已產
