@@ -1,14 +1,13 @@
 [project]
 name = "parenting-response-mcp"
 version = "0.1.0"
-description = "Fat MCP server for parenting-response — spec v2.2 + resonance-c-light v3"
+description = "Thin MCP server for parenting-response — spec v3.0(零 LLM、零 API key)"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=2.12,<3",
     "pydantic>=2.8",
-    "anthropic>=0.40",
     "psycopg[binary,pool]>=3.2",
     "alembic>=1.13",
 ]

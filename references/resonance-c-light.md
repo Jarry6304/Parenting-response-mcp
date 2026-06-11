@@ -1,7 +1,8 @@
 ---
 spec: parenting-response / mcp / resonance
 version: 3
-status: DRAFT（待審）
+status: superseded（v3.0 廢止 server 端合成層,改 host 耦合;僅供歷史參照）
+superseded_by: parenting-response-mcp-spec-v3.0.md
 date: 2026-06-11
 parent: parenting-response-mcp-spec-v2.2.md
 supersedes: v2（家族標籤 + 折算 + emotion_prior 加權）→ v3（無族、無折算、無加權;隔離並列 + 溯源生成）

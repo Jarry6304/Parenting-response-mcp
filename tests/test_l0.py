@@ -1,122 +1,117 @@
-"""L0 / promotion 驗收:A3 server 端聚合、受控詞表、promotion 鏈。"""
+"""L0 落庫:record 欄位(schema v2)/ record_id 序號 / promotion / converged / severity
+(spec v3.0 驗收 11 + 資料模型不變量)。"""
 
 from __future__ import annotations
 
 import re
+from typing import Any
 
-from parenting_response.schema import MASLOW_ORDER, OUTCOMES
+from fastmcp import Client
 
-from conftest import analyze_args, data_of
-
-
-async def test_promotion_chain_done_from_plan(client, db):
-    plan = data_of(
-        await client.call_tool("analyze_situation", analyze_args(mode="rehearsal"))
-    )
-    fin = data_of(
-        await client.call_tool(
-            "finalize_record", {"session_id": plan["session_id"], "outcome": "resolved"}
-        )
-    )
-    plan_record = await db.get_record(fin["record_id"])
-    assert plan_record is not None and plan_record["status"] == "planned"
-
-    live = data_of(
-        await client.call_tool(
-            "analyze_situation", analyze_args(mode="live", linked_plan_id=fin["record_id"])
-        )
-    )
-    fin2 = data_of(
-        await client.call_tool(
-            "finalize_record", {"session_id": live["session_id"], "outcome": "resolved"}
-        )
-    )
-    record = await db.get_record(fin2["record_id"])
-    assert record is not None
-    assert record["status"] == "done_from_plan"          # A2
-    assert record["linked_plan_id"] == fin["record_id"]  # 鏈結在 record 層
+from conftest import constraints_args, data_of, open_session, prereq_args, ready_session
+from parenting_response.db import MemoryDatabase
 
 
-async def test_a3_aggregation_is_server_side(client, db):
-    res = data_of(await client.call_tool("analyze_situation", analyze_args()))
-    sid = res["session_id"]
-    fin = data_of(
-        await client.call_tool(
-            "finalize_record",
-            {"session_id": sid, "outcome": "partial", "outcome_note": "有進展"},
-        )
-    )
-    record = await db.get_record(fin["record_id"])
-    assert record is not None
-    # 理論欄位全由 server 自 rounds 聚合,client 僅傳 outcome 系欄位。
-    assert record["dreikurs_purpose"] == "權力"
-    assert record["maslow_need"] == ["安全"]
-    assert record["erikson_stage"] == "主動對罪惡感"
-    assert record["piaget_stage"] == "前運思期"
-    assert record["dev_normative"] is True
-    assert record["tools_used"] == ["pd", "dreikurs"]  # 溯源即貢獻(utterance_sources 聯集)
-    assert record["posture"] == "溫和設限"
-    assert re.fullmatch(r"\d{8}-\d{2,}", record["record_id"])
-    session = await db.get_session(sid)
-    assert session is not None
-    assert session["goal_aligned"] is None  # partial → 不可判,不臆測
+async def finalize_clean(client: Client, sid: str, **over: Any) -> dict[str, Any]:
+    args: dict[str, Any] = {
+        "session_id": sid, "outcome": "resolved",
+        "draft": "我看到你很努力,我們一起想辦法。", "claimed_sources": ["pd", "adler"],
+    }
+    args.update(over)
+    return data_of(await client.call_tool("finalize", args))
 
 
-async def test_record_vocab_locked(client, db):
-    res = data_of(await client.call_tool("analyze_situation", analyze_args()))
-    fin = data_of(
-        await client.call_tool(
-            "finalize_record", {"session_id": res["session_id"], "outcome": "resolved"}
-        )
-    )
-    record = await db.get_record(fin["record_id"])
-    assert record is not None
-    assert record["outcome"] in OUTCOMES
-    assert record["status"] in ("planned", "done", "done_from_plan")
-    assert record["dreikurs_purpose"] in ("關注", "權力", "報復", "自暴自棄", None)
-    assert all(n in MASLOW_ORDER for n in record["maslow_need"] or [])
-    session = await db.get_session(res["session_id"])
-    assert session is not None and session["goal_aligned"] is True  # resolved → true
+async def test_record_fields_v3(client: Client, db: MemoryDatabase) -> None:
+    """records schema_version=2:新欄落地、無源欄恆 NULL、maslow_need 固定排序。"""
+    sid = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid})
+    r = await finalize_clean(client, sid, maslow_need=["尊重", "安全"], outcome_note="有效")
+    rec = await db.get_record(r["record_id"])
+    assert rec is not None
+    assert rec["schema_version"] == 2
+    assert rec["status"] == "done"
+    assert rec["session_id"] == sid
+    assert rec["draft"] == "我看到你很努力,我們一起想辦法。"
+    assert rec["claimed_sources"] == ["pd", "adler"]
+    assert rec["maslow_need"] == ["安全", "尊重"]  # MASLOW_ORDER 固定排序
+    assert rec["erikson_stage"] == "主動對罪惡感" and rec["piaget_stage"] == "前運思期"
+    assert rec["outcome"] == "resolved" and rec["outcome_note"] == "有效"
+    # v3 無判讀來源欄恆 NULL(record-schema v2)
+    assert rec["dreikurs_purpose"] is None and rec["posture"] is None
+    assert rec["dev_normative"] is None and rec["tools_used"] is None
 
 
-async def test_rounds_carry_card_outputs_trace(client, db):
-    res = data_of(await client.call_tool("analyze_situation", analyze_args()))
-    sid = res["session_id"]
-    await client.call_tool(
-        "next_round",
-        {"session_id": sid, "child_reaction": "鬆動配合", "reaction_note": "他放下車說好"},
-    )
-    rounds = await db.get_rounds(sid)
-    assert [r["round_no"] for r in rounds] == [0, 1]  # round_no server 端嚴格遞增
-    for r in rounds:
-        assert r["card"] and r["core_outputs"] and r["synthesis_trace"]
-    assert rounds[0]["child_reaction"] is None
-    assert rounds[1]["child_reaction"] == "鬆動配合"
-    assert rounds[1]["reaction_note"] == "他放下車說好"
+async def test_record_id_daily_sequence(client: Client) -> None:
+    """record_id = YYYYMMDD-NN 當日序號遞增。"""
+    ids: list[str] = []
+    for _ in range(2):
+        sid = await ready_session(client)
+        await client.call_tool("core_tags", {"session_id": sid})
+        ids.append((await finalize_clean(client, sid))["record_id"])
+    assert all(re.fullmatch(r"\d{8}-\d{2,}", i) for i in ids)
+    assert int(ids[1].split("-")[1]) == int(ids[0].split("-")[1]) + 1
 
 
-async def test_converged_with_d3_guard(client, fake_llm):
-    res = data_of(await client.call_tool("analyze_situation", analyze_args()))
-    sid = res["session_id"]
-    rr = data_of(
-        await client.call_tool(
-            "next_round",
-            {"session_id": sid, "child_reaction": "鬆動配合", "reaction_note": "他放下車說好"},
-        )
-    )
-    assert rr["converged"] is True  # satir=一致、無警訊、無新約束型
+async def test_promotion_chain_done_from_plan(client: Client, db: MemoryDatabase) -> None:
+    """rehearsal → planned;live + linked_plan_id → done_from_plan(A2 升遷鏈)。"""
+    sid = await open_session(client, mode="rehearsal")
+    await client.call_tool("prerequisites", prereq_args(sid))
+    await client.call_tool("core_tags", {"session_id": sid})
+    plan = await finalize_clean(client, sid, outcome="partial")
+    rec = await db.get_record(plan["record_id"])
+    assert rec is not None and rec["status"] == "planned"
 
-    # D3:Satir 判討好 → 不收斂。
-    discount = dict(
-        analysis="ST-討好樣態", child_stance="討好", parent_stance="指責", constraints=[]
-    )
-    fake_llm.handlers["core:satir"] = discount
-    res2 = data_of(await client.call_tool("analyze_situation", analyze_args()))
-    rr2 = data_of(
-        await client.call_tool(
-            "next_round",
-            {"session_id": res2["session_id"], "child_reaction": "鬆動配合",
-             "reaction_note": "他馬上說對不起我乖"},
-        )
-    )
-    assert rr2["converged"] is False
+    r = data_of(await client.call_tool("constraints", constraints_args(
+        linked_plan_id=plan["record_id"])))
+    sid2 = r["session_id"]
+    await client.call_tool("prerequisites", prereq_args(sid2))
+    await client.call_tool("core_tags", {"session_id": sid2})
+    done = await finalize_clean(client, sid2)
+    rec2 = await db.get_record(done["record_id"])
+    assert rec2 is not None and rec2["status"] == "done_from_plan"
+    assert rec2["linked_plan_id"] == plan["record_id"]
+
+
+async def _react(client: Client, sid: str, reaction: str, note: str | None = None) -> bool:
+    r = data_of(await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": reaction, "reaction_note": note}))
+    converged = r["converged"]
+    assert isinstance(converged, bool)
+    return converged
+
+
+async def test_converged_rules(client: Client) -> None:
+    """驗收11:converged 為 code 規則(D3 投影),非 host 自報。"""
+    # round 0 恆 False;低張力脈絡下單輪鬆動配合即收斂
+    sid = await ready_session(client)
+    r0 = data_of(await client.call_tool("core_tags", {"session_id": sid}))
+    assert r0["converged"] is False
+    assert await _react(client, sid, "鬆動配合") is True
+
+    # 高張力(情緒爆發)後第一個鬆動 = False(討好式順從防線);連續第二輪 = True
+    sid2 = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid2})
+    assert await _react(client, sid2, "情緒爆發") is False
+    assert await _react(client, sid2, "鬆動配合") is False
+    assert await _react(client, sid2, "鬆動配合") is True
+
+    # 退縮害怕同屬高張力
+    sid3 = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid3})
+    assert await _react(client, sid3, "退縮害怕") is False
+    assert await _react(client, sid3, "鬆動配合") is False
+
+    # 警訊詞阻斷收斂(配合但語境危險 ≠ 收斂)
+    sid4 = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid4})
+    assert await _react(client, sid4, "鬆動配合", "他配合了,但我剛才罵他欠揍") is False
+
+
+async def test_severity_monotonic_raises(client: Client, db: MemoryDatabase) -> None:
+    """severity 單調只升不降:② intensity=高 → 中;③ 警訊 → 高。"""
+    sid = await ready_session(client, emotion_intensity="高")
+    assert db._sessions[sid]["severity"] == "中"
+    await client.call_tool("core_tags", {"session_id": sid})
+    await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": "否認堅持", "reaction_note": "我說再吵就罰跪"})
+    assert db._sessions[sid]["severity"] == "高"

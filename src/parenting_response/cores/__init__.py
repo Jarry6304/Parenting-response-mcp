@@ -1,96 +1,94 @@
-"""十核心:registry + prompt 載入 + 隔離呼叫封裝。
+"""cores 載入器(v3.0):解析 references/cores/tags.md 的學派 TAG。
 
-隔離保證點(spec v2.2 + cores/README):
-- 每核心一次獨立 API 呼叫,輸入只有結構化情境 JSON;
-- 不含其他核心輸出、不含候選、不含歷輪卡文、不含 linked_plan(嚴格隔離,縫補裁決)。
-prompt 單一事實來源 = references/cores/<id>.md 的「## system prompt」節。
+單一事實來源 = tags.md(spec v3.0 / cores-tags 契約);本模組只做解析與
+完整性驗證,**零 LLM、零網路**。改 TAG 改文件,不改 code。
+
+格式(每校一個 ```text fenced 區塊):
+  回應核心(6):<school>: { 理念, 套用, 示範, 紅線 }
+  探詢核心(2):<school>: { 探詢, 探點, 示範問, 紅線 }
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import re
-from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, cast
 
-from pydantic import BaseModel
+from ..schema import INQUIRY_CORES, RESPONSE_CORES
 
-from ..llm import MODEL_HAIKU, MODEL_SONNET, LLMClient
-from ..schema import ALL_CORES, CORE_OUTPUT_MODELS
+_TAGS_PATH = Path(__file__).resolve().parents[3] / "references" / "cores" / "tags.md"
 
-_REFERENCES_CORES = Path(__file__).resolve().parents[3] / "references" / "cores"
+_BLOCK_RE = re.compile(r"```text\n(.*?)```", re.DOTALL)
 
-_PROMPT_RE = re.compile(r"## system prompt\s*```text\n(.*?)```", re.DOTALL)
-
-
-@dataclass(frozen=True)
-class CoreSpec:
-    core_id: str
-    role: str  # producer | perspective | constraint
-    model: str
-    output_model: type[BaseModel]
+RESPONSE_TAG_KEYS: tuple[str, ...] = ("理念", "套用", "示範", "紅線")
+INQUIRY_TAG_KEYS: tuple[str, ...] = ("探詢", "探點", "示範問", "紅線")
 
 
-REGISTRY: dict[str, CoreSpec] = {
-    "pd": CoreSpec("pd", "producer", MODEL_SONNET, CORE_OUTPUT_MODELS["pd"]),
-    "dreikurs": CoreSpec("dreikurs", "producer", MODEL_HAIKU, CORE_OUTPUT_MODELS["dreikurs"]),
-    "gottman": CoreSpec("gottman", "producer", MODEL_SONNET, CORE_OUTPUT_MODELS["gottman"]),
-    "nvc": CoreSpec("nvc", "producer", MODEL_SONNET, CORE_OUTPUT_MODELS["nvc"]),
-    "rogers": CoreSpec("rogers", "producer", MODEL_SONNET, CORE_OUTPUT_MODELS["rogers"]),
-    "adler": CoreSpec("adler", "perspective", MODEL_SONNET, CORE_OUTPUT_MODELS["adler"]),
-    "maslow": CoreSpec("maslow", "constraint", MODEL_HAIKU, CORE_OUTPUT_MODELS["maslow"]),
-    "satir": CoreSpec("satir", "constraint", MODEL_SONNET, CORE_OUTPUT_MODELS["satir"]),
-    "erikson": CoreSpec("erikson", "constraint", MODEL_HAIKU, CORE_OUTPUT_MODELS["erikson"]),
-    "piaget": CoreSpec("piaget", "constraint", MODEL_HAIKU, CORE_OUTPUT_MODELS["piaget"]),
-}
-assert tuple(REGISTRY) == ALL_CORES
+def _parse_block(block: str) -> tuple[str, dict[str, str]] | None:
+    """單一 fenced 區塊:第 0 欄 `<school>:` 開塊,其後縮排 `key: value`。
 
-
-@lru_cache(maxsize=None)
-def load_prompt(core_id: str) -> str:
-    path = _REFERENCES_CORES / f"{core_id}.md"
-    match = _PROMPT_RE.search(path.read_text(encoding="utf-8"))
-    if match is None:
-        raise RuntimeError(f"{path} 缺「## system prompt」節")
-    return match.group(1).strip()
-
-
-def parse_json_loose(raw: str) -> dict[str, Any]:
-    """容忍模型多包一層 fence/前後綴;取第一個 { 到最後一個 }。"""
-    start, end = raw.find("{"), raw.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("輸出不含 JSON 物件")
-    data = json.loads(raw[start : end + 1])
-    if not isinstance(data, dict):
-        raise ValueError("輸出 JSON 非物件")
-    return cast(dict[str, Any], data)
-
-
-async def call_core(
-    core_id: str, situation_payload: str, llm: LLMClient, *, retries: int = 1
-) -> dict[str, Any] | None:
-    """單核心隔離呼叫;失敗 retry,仍失敗回 None(unavailable)。"""
-    spec = REGISTRY[core_id]
-    system = load_prompt(core_id)
-    for _ in range(retries + 1):
-        try:
-            raw = await llm.complete(
-                model=spec.model, system=system, user=situation_payload, tag=f"core:{core_id}"
-            )
-            return spec.output_model.model_validate(parse_json_loose(raw)).model_dump()
-        except Exception:
+    非學派區塊(如文件中的格式範本)解析不出欄位 → 回 None 略過。
+    """
+    school: str | None = None
+    fields: dict[str, str] = {}
+    for line in block.splitlines():
+        if not line.strip():
             continue
-    return None
+        if not line.startswith(" "):
+            head, sep, rest = line.partition(":")
+            if sep and not rest.strip():
+                school = head.strip()
+            continue
+        key, sep, value = line.strip().partition(":")
+        if sep and school is not None and value.strip():
+            fields[key.strip()] = value.strip()
+    if school is None or not fields:
+        return None
+    return school, fields
 
 
-async def fan_out(
-    core_ids: list[str], situation_payload: str, llm: LLMClient
-) -> dict[str, dict[str, Any] | None]:
-    """單波並行(asyncio.gather);全核心吃同一份情境,互不參照。"""
-    results = await asyncio.gather(
-        *(call_core(cid, situation_payload, llm) for cid in core_ids)
-    )
-    return dict(zip(core_ids, results))
+@lru_cache(maxsize=1)
+def _load() -> dict[str, dict[str, str]]:
+    text = _TAGS_PATH.read_text(encoding="utf-8")
+    tags: dict[str, dict[str, str]] = {}
+    for block in _BLOCK_RE.findall(text):
+        parsed = _parse_block(block)
+        if parsed is not None:
+            school, fields = parsed
+            tags[school] = fields
+
+    expected: list[tuple[str, tuple[str, ...]]] = [
+        *((s, RESPONSE_TAG_KEYS) for s in RESPONSE_CORES),
+        *((s, INQUIRY_TAG_KEYS) for s in INQUIRY_CORES),
+    ]
+    for school, keys in expected:  # fail-fast:缺校 / 缺欄即啟動失敗
+        fields = tags.get(school)
+        if fields is None:
+            raise RuntimeError(f"{_TAGS_PATH} 缺學派區塊:{school}")
+        for key in keys:
+            if not fields.get(key):
+                raise RuntimeError(f"{_TAGS_PATH} 學派 {school} 缺欄位或值為空:{key}")
+    return tags
+
+
+def load_tags() -> dict[str, dict[str, str]]:
+    """全 8 校 TAG;回 copy(快取本體視為凍結)。"""
+    return {school: dict(fields) for school, fields in _load().items()}
+
+
+def response_tags() -> dict[str, dict[str, str]]:
+    """6 回應核心 TAG(③ 耦合素材)。"""
+    loaded = _load()
+    return {s: dict(loaded[s]) for s in RESPONSE_CORES}
+
+
+def inquiry_probes() -> dict[str, dict[str, str]]:
+    """2 探詢核心探點(① 引導 S1 診斷,不進耦合)。"""
+    loaded = _load()
+    return {s: dict(loaded[s]) for s in INQUIRY_CORES}
+
+
+def red_line_union() -> list[dict[str, str]]:
+    """8 校(6 回應 + 2 探詢)紅線聯集,① 約束集成分。"""
+    loaded = _load()
+    return [{"school": s, "rule": loaded[s]["紅線"]} for s in (*RESPONSE_CORES, *INQUIRY_CORES)]

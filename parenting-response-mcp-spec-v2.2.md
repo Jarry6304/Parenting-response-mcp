@@ -1,7 +1,8 @@
 ---
 spec: parenting-response / mcp
 version: 2.2
-status: DRAFT（修正項與 FSM 已 LOCK;語言選型已定案 Python;全文待審）
+status: superseded（由 v3.0 取代,僅供歷史參照）
+superseded_by: parenting-response-mcp-spec-v3.0.md
 date: 2026-06-11
 implements: parenting-response-spec-v2.md
 supersedes: v2.1（單波全獨立 + veto 事後檢）→ v2.2（FSM 順序強制 + 覆盤修正 A1–A5 / B1–B4 / C1–C3）

@@ -4,7 +4,7 @@ version: 0.1
 status: DRAFT（待審）
 date: 2026-06-11
 implements: parenting-response-mcp-spec-v2.2.md（硬 fence:G0 詞源 / pattern 禁用詞 / confounders 詞源）
-consumers: redflag.py（G0 兩級投影）, schema.py（confounders 受控詞表）, postcheck.py（輸出端 pattern）, cores 産招（禁投影聲明）, client S1（confounders 蒐集指引）
+consumers: wordlists.py（code 投影本體）, redflag.py（G0 兩級）, orchestrator.py（④ pattern_check 輸出端 / ① 約束集 F2/F3/F5 pattern）, host S1（探詢蒐集指引）
 ---
 
 # tw-parenting-antipatterns — 台灣家庭反模式語料(F1–F8 / P01–P50)
