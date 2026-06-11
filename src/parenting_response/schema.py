@@ -40,9 +40,9 @@ INTENSITIES: tuple[str, ...] = ("低", "中", "高")
 Severity = Literal["低", "中", "高"]
 SEVERITY_ORDER: dict[str, int] = {"低": 0, "中": 1, "高": 2}
 
-SessionStatus = Literal["open", "finalized", "redflag_stopped"]
-# FSM stage(spec v3.0):① constrained → ② {ready|short_pending} → 終態
-SessionStage = Literal["constrained", "ready", "short_pending", "finalized", "redflag_stopped"]
+SessionStatus = Literal["open", "finalized", "redflag_stopped", "expired"]  # expired = TTL 棄案
+# FSM stage(spec v3.0):① constrained → ② {ready|short_pending} → 終態(expired 僅由 TTL 清掃產生)
+SessionStage = Literal["constrained", "ready", "short_pending", "finalized", "redflag_stopped", "expired"]
 RecordStatus = Literal["planned", "done", "done_from_plan", "stopped"]  # stopped = 紅旗案,不進 promotion
 
 ChildReaction = Literal["鬆動配合", "否認堅持", "情緒爆發", "退縮害怕", "反問試探", "轉移打岔"]
@@ -84,3 +84,7 @@ class Redflag(BaseModel):
     hit: bool
     reason: str
     referral: str
+    # 證據鏈(defect-fixes #8):命中欄位 / 詞組 / 前後文節錄(events 同步落庫,可重建緣由)
+    field: str | None = None
+    phrase: str | None = None
+    excerpt: str | None = None

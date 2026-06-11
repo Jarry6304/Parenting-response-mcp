@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import importlib.util
 import inspect
 from typing import Any
@@ -155,6 +156,37 @@ async def test_concurrent_double_finalize_exactly_one(
     errs = [x for x in (r1, r2) if isinstance(x, PRError)]
     assert len(oks) == 1 and len(errs) == 1 and errs[0].code == "E_INVALID_STATE"
     assert len(db._records) == 1
+
+
+async def test_stale_open_session_expires_on_next_constraints(
+    client: Client, db: MemoryDatabase
+) -> None:
+    """#6:逾期 open 案於下次 ① lazy 轉吸收態 expired;不產 record,severity 留存可查。"""
+    stale = await ready_session(client)
+    db._sessions[stale]["created_at"] -= _dt.timedelta(days=31)
+    fresh = await open_session(client)  # 任一新 ① 觸發清掃
+    s = db._sessions[stale]
+    assert s["status"] == "expired" and s["stage"] == "expired"
+    assert s["severity"] is not None  # 安全訊號不隨棄案消失
+    assert await db.get_record_by_session(stale) is None
+    assert db._sessions[fresh]["status"] == "open"
+    blocked: list[tuple[str, dict[str, Any]]] = [
+        ("prerequisites", prereq_args(stale)),
+        ("core_tags", {"session_id": stale}),
+        ("finalize", {"session_id": stale, "outcome": "resolved", "draft": "好。"}),
+    ]
+    for tool, args in blocked:  # expired 為吸收態
+        with pytest.raises(ToolError, match="E_INVALID_STATE"):
+            await client.call_tool(tool, args)
+
+
+async def test_recent_round_activity_defers_expiry(client: Client, db: MemoryDatabase) -> None:
+    """#6:TTL 錨定最後活動——建案久遠但近期仍有輪(乒乓跨日)→ 不棄。"""
+    sid = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid})  # 近期輪活動
+    db._sessions[sid]["created_at"] -= _dt.timedelta(days=31)
+    await open_session(client)
+    assert db._sessions[sid]["status"] == "open"
 
 
 def test_zero_llm_assertable() -> None:

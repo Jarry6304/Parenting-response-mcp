@@ -43,6 +43,17 @@ async def test_record_fields_v3(client: Client, db: MemoryDatabase) -> None:
     assert rec["dev_normative"] is None and rec["tools_used"] is None
 
 
+def test_record_id_anchors_taipei_day() -> None:
+    """#10:record_id 的「當日」= 臺北日(+8 固定),非伺服器本地日(UTC 容器不錯日)。"""
+    import datetime as _dt
+
+    from parenting_response.orchestrator import _TZ_TAIPEI
+
+    assert _TZ_TAIPEI.utcoffset(None) == _dt.timedelta(hours=8)
+    utc_evening = _dt.datetime(2026, 6, 10, 18, 30, tzinfo=_dt.timezone.utc)  # 臺北已是 11 日
+    assert utc_evening.astimezone(_TZ_TAIPEI).strftime("%Y%m%d") == "20260611"
+
+
 async def test_record_id_daily_sequence(client: Client) -> None:
     """record_id = YYYYMMDD-NN 當日序號遞增。"""
     ids: list[str] = []

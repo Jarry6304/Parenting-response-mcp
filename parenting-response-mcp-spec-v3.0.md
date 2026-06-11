@@ -3,7 +3,7 @@ spec: parenting-response / mcp
 version: 3.0
 status: LOCKED（架構與三項待議全數定案,不再討論）
 date: 2026-06-11
-amended: 2026-06-11（defect-fixes v1.0,#1–#5 已併入:stopped record / ④ G0 / ④ 須 ≥1 輪 ③ / 高張力 note 閘 / converged 錨點）
+amended: 2026-06-11（defect-fixes v1.0,#1–#5:stopped record / ④ G0 / ④ 須 ≥1 輪 ③ / 高張力 note 閘 / converged 錨點;defect-fixes v1.1,#6–#11:棄案 TTL=expired / events 稽核證據鏈 / 預設綁 127.0.0.1 / record_id 臺北日 / F2·F5 人身錨定）
 supersedes: v2.2（fat server + 自有 API key + code 強制隔離）→ v3.0（thin server + 零 API key + host 耦合 + 盡量隔離）
 ---
 
@@ -64,7 +64,7 @@ stateDiagram-v2
     redflag_stopped --> [*]
 ```
 
-## Tool 介面（① → ② → ③* → ④;終態 `finalized` / `redflag_stopped` 為吸收態）
+## Tool 介面（① → ② → ③* → ④;終態 `finalized` / `redflag_stopped` 與 TTL 棄案 `expired` 皆為吸收態）
 
 | # | tool | 輸入契約 | server（純 code） | 過 → | 不過 → |
 |---|---|---|---|---|---|
@@ -78,6 +78,8 @@ stateDiagram-v2
 - **③ 複檢前提(defect-fixes #4):** `child_reaction ∈ {情緒爆發, 退縮害怕}`(高張力)而缺 `reaction_note` → 回 ask-gate(`requires=reaction_note`),不 insert round、不解鎖——紅旗複檢的風險集中在高張力輪,有效性不可繫於 host 自律;非高張力輪無轉述 → 跳過複檢(已知軟點,如實陳述)。
 - **④ G0(defect-fixes #2):** `draft / outcome_note / parent_self_note / followup` 一律複檢(short 模式同樣適用,short 只略過 pattern_check);短路命中**不拒收、不改走 redflag_stopped**——④ 紅旗主體多為家長自陳而非進行中乒乓,鎖案無助益;回傳附 `redflag`/`referral` 且 severity 升「高」(警訊級 → 附 `warnings` + severity 升「高」;G0 訊號不因 pattern 拒收而丟失)。
 - **④ 前置(defect-fixes #3):** 一般模式須先 ③ `core_tags` 至少一輪(round 0 起手),否則 `E_INVALID_STATE`——host 未取得任何 TAG 不得交稿,學派引導不可整段繞過;short 模式本就免 ③,不受此守衛影響。
+- **棄案 TTL(defect-fixes #6):** open 案自**最後活動**(建案或最近一輪,非單看建案時間——乒乓本就跨日)逾 `SESSION_TTL_DAYS`(預設 30,≤0 停用)天,於下次 ① 懶清掃轉吸收態 `expired`:不產 record、`severity` 留存於 sessions 供 L0 追蹤(警訊訊號不隨棄案消失)。
+- **稽核事件(defect-fixes #7/#8):** G0 命中(兩級,①③④)與 ④ pattern 拒收一律落 `events`(append-only):短路記欄位/詞組/前後文節錄/`referral_delivered`,警訊記 (欄位, 詞組) 列,拒收記 violations 與嘗試之 outcome——`severity=高` 與拒收重試皆可重建緣由。「曾接觸紅旗之案」= `events.kind=g0_shortcircuit` ∪ `outcome=escalated_to_redflag`(④ 命中不拒收的列 record 外觀正常,證據在 events)。欄位契約見 `record-schema.md`。
 - 違序呼叫明確錯誤,**零 server 成本**。
 
 ## 學派 TAG 設計（Approach 1,locked;詳見 `references/cores/tags.md`）
@@ -126,7 +128,7 @@ stateDiagram-v2
 
 | 保證 | 強度 | 機制 |
 |---|---|---|
-| G0 紅旗（短路自傷/虐待 → 轉介;警訊 → severity↑） | **硬（code）** | ① 輸入 + ③ 每輪 reaction + ④ 四個自由文本(④ 命中不拒收:轉介必達 + severity↑) |
+| G0 紅旗（短路自傷/虐待 → 轉介;警訊 → severity↑） | **硬（code）** | ① 輸入 + ③ 每輪 reaction + ④ 四個自由文本(④ 命中不拒收:轉介必達 + severity↑);命中一律 `events` 稽核落庫 |
 | 必填軸 / 正向紀錄 `script_decision` 閘 | **硬（code）** | ②；缺則不解鎖 |
 | 禁用詞 `pattern_check` | **硬（code）** | ④ 落庫前;不過拒收 |
 | FSM 序 / DB 不變量 / Erikson-Piaget / `converged` / 反應強調映射 | **硬（code）** | server 端 |

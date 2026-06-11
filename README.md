@@ -14,6 +14,8 @@
 | ④ `finalize` | `session_id / outcome / draft`(short 模式禁 draft;一般模式須 ≥1 輪 ③) | 自由文本 G0 複檢(短路 → 轉介必達 + severity 高,案照收)+ 禁用詞 `pattern_check`:過 → `record_id`;違規 → 拒落庫回違規詞 |
 
 - 終態 `finalized` / `redflag_stopped` 為吸收態;G0 警訊級不停案但 severity 升「高」(單調只升)。
+- 棄案 TTL:open 案自最後活動逾 `SESSION_TTL_DAYS`(預設 30)天,下次 ① 懶清掃轉吸收態 `expired`(無 record;severity 留存供追蹤)。
+- 稽核證據鏈:G0 命中(兩級)與 ④ 拒收一律落 `events`(欄位/詞組/節錄/轉介送達;kind 契約見 `references/record-schema.md`)。
 - `converged` 為 code 規則(D3):討好式順從 ≠ 收斂——自最近一次高張力(情緒爆發/退縮害怕)後需 ≥1 輪鬆動配合才收斂,夾其他反應不重置(判定表見 spec v3.0)。
 - promotion 鏈:rehearsal 收案得 `record_id` → live 以 `linked_plan_id` 引用 → 自動 `done_from_plan`;紅旗案 record(`status=stopped`)不可引用(`E_INVALID_LINK`)。
 - ④ 可附 `claimed_sources`(⊆ 6 回應核心,軟溯源)與 `maslow_need`(⊆ 缺損四層,① 探點命中之回報);host 負責 S1 探詢、以 primary 領銜耦合、把實際草稿交回後檢。
@@ -22,7 +24,7 @@
 
 ```bash
 uv venv --python 3.12 && uv sync
-uv run pytest -q     # 32 條驗收(in-memory,免 PG、免任何 API key)
+uv run pytest -q     # 63 條驗收(in-memory,免 PG、免任何 API key)
 uv run pyright       # strict(src),0 errors
 ```
 
@@ -31,9 +33,12 @@ uv run pyright       # strict(src),0 errors
 ```bash
 export DATABASE_URL=postgresql://user:pass@localhost/parenting_response
 export MCP_BEARER_TOKEN=change-me   # 選填:設了即啟用 bearer 閘
+export SESSION_TTL_DAYS=30          # 選填:棄案 TTL(≤0 停用)
 uv run alembic upgrade head         # 既有庫升級(或交由啟動時 ensure_schema)
-uv run parenting-response-mcp       # streamable-HTTP,預設 0.0.0.0:8000
+uv run parenting-response-mcp       # streamable-HTTP,預設 127.0.0.1:8000
 ```
+
+對外暴露須顯式 `HOST=0.0.0.0`(或指定網卡):records 含兒少個資,**請務必同時設 bearer token** 或以反向代理加閘——綁非 loopback 而未設 token 會在啟動時印出警告。
 
 Claude custom connector:URL 填 `https://<host>:<port>/mcp`,有 token 則以 bearer 連線。
 **部署 = repo checkout + `uv run`**(`references/` 是 runtime 輸入,不隨 wheel 打包)。
@@ -59,8 +64,8 @@ src/parenting_response/
 ├── schema.py        # 受控詞表 + 錯誤碼
 ├── wordlists.py     # antipatterns 的 code 投影
 └── db.py            # psycopg3 + 不變量;Memory 同語意(測試)
-migrations/          # Alembic(0001 初始 / 0002 v3 冪等升級)
-tests/               # 32 條驗收(零 LLM)
+migrations/          # Alembic(0001 初始 / 0002 v3 / 0003 events,皆冪等)
+tests/               # 63 條驗收(零 LLM)
 ```
 
 已知邊界:真 PG 遷移與 bearer 閘待真環境整合驗證;未來 L1–L4 聚合、SQLite 後端、fastmcp 3.x 升級皆為獨立決策。
