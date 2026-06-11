@@ -97,7 +97,7 @@ outcome ∈ {unresolved, escalated_to_redflag} → false
 
 ## A3 理論欄位聚合回填(finalize / 自動 record 共用)
 
-**來源**:各輪 `rounds.resonance_trace` 內保存的**核心輸出欄位**。欄位名以 `references/cores/*.md` 各核心輸出契約為準(`purpose`、`unmet_needs`、`stage_observed`、`within_norm`、`child_stance` 等),即 de facto 契約;trace 只是載體——**⚠ 待對齊:trace 內的包裝路徑(核心輸出掛在 trace 哪個 key 下)待 `resonance-c-light.md` 重產時定案,重產前以本檔 + cores 欄位名為準**。
+**來源**:各輪 `rounds.core_outputs`(各核心原始輸出,key = 核心 id)。resonance v3 將 `synthesis_trace` 瘦身為溯源審計後,核心輸出改以此專欄落庫——隔離審計與 A3 聚合共用一源。欄位名以 `references/cores/*.md` 各核心輸出契約為準(`purpose`、`unmet_needs`、`stage_observed`、`within_norm`、`child_stance` 等),即 de facto 契約。
 
 **聚合通則**:判讀類取「最後一次出現」(乒乓後期資訊較多、判讀較準);累積類取聯集;核心整 session 缺席 → NULL 或預設映射,不臆測。
 
@@ -108,8 +108,10 @@ outcome ∈ {unresolved, escalated_to_redflag} → false
 | erikson_stage | 最後一輪 erikson `stage_observed`;整程缺席 → 依 age_band 預設映射 |
 | piaget_stage | 最後一輪 piaget `stage_observed`;整程缺席 → 依 age_band 預設映射 |
 | dev_normative | erikson `within_norm` ∧ piaget `within_norm`(各取最後值);任一 false → false;兩者皆缺席 → NULL;僅一方有值 → 取該方 |
-| tools_used | 各輪 trace「對該輪卡有貢獻」核心之聯集(**⚠ 待對齊:貢獻判定欄位待 resonance-c-light.md 重產時定案**) |
-| posture | 最後一張 `degraded=false` 之卡的 `candidate.posture`;全程降級 → NULL |
+| tools_used | 各輪 `synthesis_trace.utterance_sources[].core` 聯集(resonance v3:溯源即貢獻判定) |
+| posture | 最後一張 `degraded=false` 卡之「姿態」欄(SYN 生成、可跨核心織,仍 ∈ 本檔 8 值;resonance v3);全程降級 → NULL |
+
+L1–L4 的核心取用率統計同樣以 `synthesis_trace.utterance_sources` 為源——溯源即歸因(resonance v3);本檔不收任何理論家族受控詞表(v3 去家族化)。
 
 **自動 record(next_round G0 複檢命中,v2.2)**:`outcome=escalated_to_redflag`(鎖定);`outcome_note` = server 填 G0 reason;理論欄位照上表以**既有 rounds** 聚合;`parent_self_note` / `followup` = NULL——終態後無補註管道,補註機制 → 待議。
 
@@ -124,4 +126,3 @@ outcome ∈ {unresolved, escalated_to_redflag} → false
 
 - 正向紀錄是否走短管線(目前:全管線)
 - 終態後 record 補註(parent_self_note 事後追記)機制
-- trace 包裝路徑與 tools_used 貢獻判定 → 待 `resonance-c-light.md` 重產時收斂(⚠)
