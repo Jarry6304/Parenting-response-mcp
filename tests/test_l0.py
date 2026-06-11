@@ -116,14 +116,14 @@ async def test_converged_rules(client: Client) -> None:
     # 高張力(情緒爆發)後第一個鬆動 = False(討好式順從防線);連續第二輪 = True
     sid2 = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid2})
-    assert await _react(client, sid2, "情緒爆發") is False
+    assert await _react(client, sid2, "情緒爆發", "大哭摔積木") is False
     assert await _react(client, sid2, "鬆動配合") is False
     assert await _react(client, sid2, "鬆動配合") is True
 
     # 退縮害怕同屬高張力
     sid3 = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid3})
-    assert await _react(client, sid3, "退縮害怕") is False
+    assert await _react(client, sid3, "退縮害怕", "低頭不說話一直發抖") is False
     assert await _react(client, sid3, "鬆動配合") is False
 
     # 警訊詞阻斷收斂(配合但語境危險 ≠ 收斂)

@@ -70,6 +70,35 @@ async def test_reaction_warning_raises_severity(client: Client, db: MemoryDataba
     assert db._sessions[sid]["status"] == "open"  # 警訊不停案
 
 
+async def test_high_tension_round_requires_note(client: Client, db: MemoryDatabase) -> None:
+    """#4:高張力輪缺 reaction_note → ask-gate(不 insert round);補 note 含短路詞 → escalate。"""
+    sid = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid})
+    r = data_of(await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": "情緒爆發"}))
+    assert r["requires"] == "reaction_note"
+    assert len(await db.get_rounds(sid)) == 1  # ask-gate 不落輪
+    r2 = data_of(await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": "情緒爆發", "reaction_note": "他說他不想活了"}))
+    assert r2["redflag"]["hit"] is True
+    assert db._sessions[sid]["status"] == "redflag_stopped"
+
+    sid2 = await ready_session(client)  # 退縮害怕同屬高張力
+    await client.call_tool("core_tags", {"session_id": sid2})
+    r3 = data_of(await client.call_tool("core_tags", {
+        "session_id": sid2, "child_reaction": "退縮害怕"}))
+    assert r3["requires"] == "reaction_note"
+
+
+async def test_non_high_tension_note_optional(client: Client) -> None:
+    """#4:非高張力輪不強制轉述(無 note 照常回 TAG;已知軟點,文件如實陳述)。"""
+    sid = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid})
+    r = data_of(await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": "否認堅持"}))
+    assert len(r["response_tags"]) == 6
+
+
 async def test_positive_log_ask_gate(client: Client) -> None:
     """驗收5:正向紀錄缺 script_decision → ask-gate,③④ 不解鎖。"""
     sid = await open_session(client, facts="他今天主動把碗收到水槽", emotion="開心")

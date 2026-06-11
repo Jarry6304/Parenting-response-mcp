@@ -83,8 +83,10 @@ async def test_reaction_primary_mapping_deterministic(client: Client) -> None:
     for reaction, expected in SPEC_PRIMARY.items():
         sid = await ready_session(client)
         await client.call_tool("core_tags", {"session_id": sid})
+        # 高張力輪強制轉述(#4);乾淨文本避開詞表
+        note = "大哭把積木掃到地上" if reaction in {"情緒爆發", "退縮害怕"} else None
         r = data_of(await client.call_tool("core_tags", {
-            "session_id": sid, "child_reaction": reaction}))
+            "session_id": sid, "child_reaction": reaction, "reaction_note": note}))
         tags = r["response_tags"]
         assert {t["school"] for t in tags} == set(RESPONSE_CORES), reaction  # 6 核心都回
         got_primary = {t["school"] for t in tags if t["role"] == "primary"}

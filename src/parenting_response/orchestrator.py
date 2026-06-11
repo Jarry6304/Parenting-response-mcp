@@ -158,7 +158,12 @@ class Orchestrator:
         else:  # 乒乓輪需 reaction
             if child_reaction not in CHILD_REACTIONS:
                 raise PRError(E_INVALID_STATE, f"child_reaction 須 ∈ 六類:{child_reaction}")
-            rf = check_shortcircuit(reaction_note if reaction_note else child_reaction)  # G0 複檢
+            # 高張力輪強制轉述(硬閘,與 ② script_decision 同型):紅旗複檢的風險
+            # 集中在高張力輪,G0 有效性不可繫於 host 自律;非高張力無轉述 → 跳過複檢(已知軟點)。
+            if child_reaction in _HIGH_TENSION_REACTIONS and not reaction_note:
+                return {"requires": "reaction_note",
+                        "ask": "孩子有情緒爆發/退縮反應,請轉述他實際說了什麼或做了什麼(G0 複檢需要)"}
+            rf = check_shortcircuit(reaction_note)  # G0 複檢(None-safe;高張力輪必有轉述)
             if rf is not None:
                 await self._escalate(session_id, s, rf)
                 return {"redflag": rf.model_dump(), "referral": rf.referral, "card": None}
