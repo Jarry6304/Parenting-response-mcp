@@ -44,7 +44,7 @@ v3.0 零 LLM:server 不再產生 per-situation 判讀,records 欄位來源全面
 | sessions.confounders | `F1`–`F8` 之子集 | 家族代碼,詞源 `tw-parenting-antipatterns.md`;可空 |
 | rounds.child_reaction | `鬆動配合` \| `否認堅持` \| `情緒爆發` \| `退縮害怕` \| `反問試探` \| `轉移打岔` | round 0 = NULL;操作型定義見 `pingpong.md` |
 | rounds.reaction_note | 自由文本(可空) | S3 家長轉述;G0 複檢對象 + 核心輸入的現實事件來源(縫補) |
-| records.status | `planned` \| `done` \| `done_from_plan` | 映射規則見下「mode 與 record.status」 |
+| records.status | `planned` \| `done` \| `done_from_plan` \| `stopped` | 映射規則見下「mode 與 record.status」;`stopped` 自 defect-fixes(2026-06-11)加入 v2 值域,不另 bump(僅出現於 `outcome=escalated_to_redflag` 之列,讀取端本就特判該 outcome) |
 | records.outcome | `resolved` \| `partial` \| `unresolved` \| `escalated_to_redflag` | rehearsal 模式語意見下 |
 | records.dreikurs_purpose | `關注` \| `權力` \| `報復` \| `自暴自棄` \| NULL | NULL = 未判讀或核心回報「不明」 |
 | records.maslow_need | JSONB 陣列 ⊆ `[生理, 安全, 愛與歸屬, 尊重]` | 「未滿足層」;自我實現不入 L0(兒少情境聚焦缺損層);NULL = 未判讀,`[]` = 判讀過皆滿足 |
@@ -85,6 +85,7 @@ v3.0 零 LLM:server 不再產生 per-situation 判讀,records 欄位來源全面
 
 | 條件 | record.status | outcome 語意 |
 |---|---|---|
+| outcome=escalated_to_redflag(G0 複檢自動收案或自報;**優先於 mode**) | `stopped` | 紅旗案非可執行計畫,不進 promotion 鏈;① 引用一律 `E_INVALID_LINK`(雙保險:① 守衛另驗 outcome,兼擋 v1 遺留列) |
 | mode=rehearsal | `planned`(固定) | resolved=計畫可用 / partial=計畫待磨 / unresolved=未得計畫 |
 | mode=live 且 session.linked_plan_id 為空 | `done` | 字面語意 |
 | mode=live 且 session.linked_plan_id 非空 | `done_from_plan`,record.linked_plan_id ← session 值 | 字面語意(promotion 鏈,A2) |

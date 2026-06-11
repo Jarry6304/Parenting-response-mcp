@@ -43,7 +43,7 @@ SEVERITY_ORDER: dict[str, int] = {"低": 0, "中": 1, "高": 2}
 SessionStatus = Literal["open", "finalized", "redflag_stopped"]
 # FSM stage(spec v3.0):① constrained → ② {ready|short_pending} → 終態
 SessionStage = Literal["constrained", "ready", "short_pending", "finalized", "redflag_stopped"]
-RecordStatus = Literal["planned", "done", "done_from_plan"]
+RecordStatus = Literal["planned", "done", "done_from_plan", "stopped"]  # stopped = 紅旗案,不進 promotion
 
 ChildReaction = Literal["鬆動配合", "否認堅持", "情緒爆發", "退縮害怕", "反問試探", "轉移打岔"]
 CHILD_REACTIONS: tuple[str, ...] = ("鬆動配合", "否認堅持", "情緒爆發", "退縮害怕", "反問試探", "轉移打岔")

@@ -6,7 +6,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import pytest
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 
 from conftest import constraints_args, data_of, open_session, prereq_args, ready_session
 from parenting_response.db import MemoryDatabase
@@ -70,6 +72,29 @@ async def test_promotion_chain_done_from_plan(client: Client, db: MemoryDatabase
     rec2 = await db.get_record(done["record_id"])
     assert rec2 is not None and rec2["status"] == "done_from_plan"
     assert rec2["linked_plan_id"] == plan["record_id"]
+
+
+async def test_redflag_record_excluded_from_promotion(client: Client, db: MemoryDatabase) -> None:
+    """#1:rehearsal 紅旗自動收案 → record.status=stopped,① 引用一律 E_INVALID_LINK。"""
+    sid = await open_session(client, mode="rehearsal")
+    await client.call_tool("prerequisites", prereq_args(sid))
+    await client.call_tool("core_tags", {"session_id": sid})
+    r = data_of(await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": "情緒爆發", "reaction_note": "他撞牆說想消失"}))
+    assert r["redflag"]["hit"] is True
+    rec = await db.get_record_by_session(sid)
+    assert rec is not None
+    assert rec["status"] == "stopped" and rec["outcome"] == "escalated_to_redflag"
+    with pytest.raises(ToolError, match="E_INVALID_LINK"):
+        await client.call_tool("constraints", constraints_args(linked_plan_id=rec["record_id"]))
+
+
+async def test_legacy_planned_escalated_record_blocked(client: Client, db: MemoryDatabase) -> None:
+    """#1 縱深:v1 遺留列(status=planned ∧ outcome=escalated)由 outcome 防線擋。"""
+    db._records["LEGACY-01"] = {"record_id": "LEGACY-01", "status": "planned",
+                                "outcome": "escalated_to_redflag"}
+    with pytest.raises(ToolError, match="E_INVALID_LINK"):
+        await client.call_tool("constraints", constraints_args(linked_plan_id="LEGACY-01"))
 
 
 async def _react(client: Client, sid: str, reaction: str, note: str | None = None) -> bool:

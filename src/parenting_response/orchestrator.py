@@ -72,11 +72,14 @@ class Orchestrator:
         if not facts or not emotion or mode not in MODES:
             raise PRError(E_MISSING_AXIS, "① 必要:facts / emotion / mode(live|rehearsal)")
 
-        # linked_plan 守衛(承 v2.2 A2):須指向存在且 status=planned 的 record。
+        # linked_plan 守衛(承 v2.2 A2):須指向存在且 status=planned 的 record;
+        # outcome 驗證為縱深防禦,兼擋 v1 遺留之 planned+escalated 列(紅旗案不可引用)。
         if linked_plan_id is not None:
             rec = await self.db.get_record(linked_plan_id)
-            if rec is None or rec.get("status") != "planned":
-                raise PRError(E_INVALID_LINK, f"linked_plan_id={linked_plan_id} 不存在或非 planned")
+            if (rec is None or rec.get("status") != "planned"
+                    or rec.get("outcome") == "escalated_to_redflag"):
+                raise PRError(E_INVALID_LINK,
+                              f"linked_plan_id={linked_plan_id} 不存在、非 planned 或為紅旗案")
 
         session_id = uuid.uuid4().hex
 
@@ -278,7 +281,9 @@ class Orchestrator:
     ) -> dict[str, Any]:
         band = s.get("age_band")
         linked = s.get("linked_plan_id")
-        if str(s["mode"]) == "rehearsal":
+        if outcome == "escalated_to_redflag":
+            status = "stopped"  # 紅旗案非可執行計畫,不進任何 promotion 推導
+        elif str(s["mode"]) == "rehearsal":
             status = "planned"
         elif linked:
             status = "done_from_plan"
