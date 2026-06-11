@@ -27,7 +27,7 @@ v3.0 零 LLM:server 不再產生 per-situation 判讀,records 欄位來源全面
 
 - **A3 聚合自 v2 起廢止**(rounds 不再有核心輸出可聚;後文 A3 節僅適用 v1 列)。
 - sessions 推導:`severity` 單調只升不降——① 警訊級命中 → 高;② `emotion_intensity=高` → 中;③ 複檢警訊 → 高;④ 自由文本 G0(短路或警訊)→ 高(`safety_flag`/`confounders` 軸 v3 不收,該兩條件停用)。`goal_aligned` v3 不再推導(無 `parent_goal` 軸)→ NULL。`is_positive_log` 同 v1。
-- sessions 新增 `stage`(`constrained|ready|short_pending|finalized|redflag_stopped`),FSM 細分守衛用;`age_band`/`emotion_intensity` 改可 NULL(① 先建 session、② 才補軸)。
+- sessions 新增 `stage`(`constrained|ready|short_pending|finalized|redflag_stopped|expired`),FSM 細分守衛用;`age_band`/`emotion_intensity` 改可 NULL(① 先建 session、② 才補軸)。
 - L1–L4 讀取端:`schema_version=2` 列照本節;`=1` 列照後文 v1 規則。
 
 ## 受控詞表(鎖定值域)
@@ -35,7 +35,7 @@ v3.0 零 LLM:server 不再產生 per-situation 判讀,records 欄位來源全面
 | 欄位 | 值域 | 語意備註 |
 |---|---|---|
 | sessions.mode | `live` \| `rehearsal` | live = 現場處理;rehearsal = 預演 |
-| sessions.status | `open` \| `finalized` \| `redflag_stopped` | FSM 狀態,見 v2.2 |
+| sessions.status | `open` \| `finalized` \| `redflag_stopped` \| `expired` | FSM 狀態,見 v2.2;`expired` = TTL 棄案(defect-fixes #6,自最後活動逾 `SESSION_TTL_DAYS` 由 ① 懶清掃轉入;無 record,severity 留存) |
 | sessions.age_band | `2-3` \| `4-6` \| `7-11` \| `12+` | 0-2 刻意範圍外(C3),pydantic 層擋 |
 | sessions.emotion | 自由文本(必填) | 家長當下主情緒,建議單一情緒短語;非受控(B1 只要求 NOT NULL) |
 | sessions.emotion_intensity | `低` \| `中` \| `高` | 家長主觀自評;S1 問法由 client 負責 |

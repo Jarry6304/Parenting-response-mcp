@@ -17,6 +17,7 @@ PG 真不變量由 DDL + PgDatabase 承載(TEST_DATABASE_URL 可跑同一套測�
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import json
 from typing import Any, Protocol
 
@@ -124,6 +125,7 @@ class Database(Protocol):
     async def get_record(self, record_id: str) -> dict[str, Any] | None: ...
     async def get_record_by_session(self, session_id: str) -> dict[str, Any] | None: ...
     async def count_records_with_prefix(self, prefix: str) -> int: ...
+    async def expire_stale_sessions(self, cutoff: _dt.datetime) -> int: ...
     async def finalize_tx(
         self, session_id: str, *, terminal_status: str,
         session_updates: dict[str, Any], record_row: dict[str, Any],
@@ -145,7 +147,9 @@ class MemoryDatabase:
             sid = row["session_id"]
             if sid in self._sessions:
                 raise UniqueViolation(f"session {sid} 已存在")
-            self._sessions[sid] = dict(row)
+            stored = dict(row)
+            stored.setdefault("created_at", _dt.datetime.now(_dt.timezone.utc))  # PG: DEFAULT now()
+            self._sessions[sid] = stored
             self._rounds[sid] = []
 
     async def get_session(self, session_id: str) -> dict[str, Any] | None:
@@ -170,6 +174,7 @@ class MemoryDatabase:
                 "child_reaction": child_reaction, "reaction_note": reaction_note,
                 "card": card, "core_outputs": core_outputs,
                 "synthesis_trace": synthesis_trace, "degraded": degraded,
+                "created_at": _dt.datetime.now(_dt.timezone.utc),  # PG: DEFAULT now()
             })
             return round_no
 
@@ -186,6 +191,20 @@ class MemoryDatabase:
 
     async def count_records_with_prefix(self, prefix: str) -> int:
         return sum(1 for rid in self._records if rid.startswith(prefix))
+
+    async def expire_stale_sessions(self, cutoff: _dt.datetime) -> int:
+        # 棄案 TTL 錨定「最後活動」:建案久遠但近期仍有輪 → 不棄(乒乓本就跨日)
+        async with self._lock:
+            n = 0
+            for sid, s in self._sessions.items():
+                if s["status"] != "open" or s["created_at"] >= cutoff:
+                    continue
+                if any(r["created_at"] >= cutoff for r in self._rounds.get(sid, [])):
+                    continue
+                s["status"] = "expired"
+                s["stage"] = "expired"
+                n += 1
+            return n
 
     async def finalize_tx(
         self, session_id: str, *, terminal_status: str,
@@ -310,6 +329,19 @@ class PgDatabase:
             row = await cur.fetchone()
             assert row is not None
             return int(row[0])
+
+    async def expire_stale_sessions(self, cutoff: _dt.datetime) -> int:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                UPDATE sessions s SET status = 'expired', stage = 'expired'
+                WHERE s.status = 'open' AND s.created_at < %s
+                  AND NOT EXISTS (SELECT 1 FROM rounds r
+                                  WHERE r.session_id = s.session_id AND r.created_at >= %s)
+                """,
+                (cutoff, cutoff),
+            )
+            return cur.rowcount
 
     async def finalize_tx(
         self, session_id: str, *, terminal_status: str,

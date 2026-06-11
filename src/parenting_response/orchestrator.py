@@ -59,8 +59,9 @@ _HIGH_TENSION_REACTIONS = {"情緒爆發", "退縮害怕"}
 
 
 class Orchestrator:
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: Database, *, session_ttl_days: int = 30) -> None:
         self.db = db
+        self.session_ttl_days = session_ttl_days  # ≤0 = 停用棄案清掃
         # 注意:無 self.llm —— v3 零推論,刻意不收 LLM client
 
     # ── ① constraints(約束探詢,內含 G0) ─────────────────────────
@@ -71,6 +72,12 @@ class Orchestrator:
     ) -> dict[str, Any]:
         if not facts or not emotion or mode not in MODES:
             raise PRError(E_MISSING_AXIS, "① 必要:facts / emotion / mode(live|rehearsal)")
+
+        # 棄案 TTL(lazy 清掃):host 斷線遺留的 open 案逾期轉吸收態 expired,
+        # 不產 record;severity 留在 sessions 供 L0 追蹤。錨定最後活動而非建案時間。
+        if self.session_ttl_days > 0:
+            cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=self.session_ttl_days)
+            await self.db.expire_stale_sessions(cutoff)
 
         # linked_plan 守衛(承 v2.2 A2):須指向存在且 status=planned 的 record;
         # outcome 驗證為縱深防禦,兼擋 v1 遺留之 planned+escalated 列(紅旗案不可引用)。

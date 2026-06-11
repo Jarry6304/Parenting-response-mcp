@@ -138,13 +138,14 @@ def main() -> None:
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "8000"))
     token = os.environ.get("MCP_BEARER_TOKEN")
+    ttl_days = int(os.environ.get("SESSION_TTL_DAYS", "30"))  # ≤0 = 停用棄案清掃
     auth = StaticTokenVerifier(tokens={token: {"client_id": "mcp-host"}}) if token else None
 
     async def _run() -> None:
         db = PgDatabase(dsn)
         await db.open()
         await db.ensure_schema()
-        orch = Orchestrator(db)  # 注意:不傳 llm —— v3 零推論
+        orch = Orchestrator(db, session_ttl_days=ttl_days)  # 注意:不傳 llm —— v3 零推論
         server = build_server(orch, auth=auth)
         await server.run_async(transport="streamable-http", host=host, port=port)
 
