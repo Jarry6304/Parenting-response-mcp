@@ -88,7 +88,10 @@ src/parenting_response/
 migrations/          # Alembic 0001–0008(皆冪等;0007 就地加密需金鑰)
 tests/               # 134 條驗收(零 LLM)
 Dockerfile           # Cloud Run 映像(uv slim + references/)
-.github/workflows/backup.yml  # 週備份
+.env.example         # 環境變數範本(對齊上方 env 總表)
+.github/workflows/
+├── test.yml         # CI:push/PR 跑 pytest + pyright
+└── backup.yml       # 週備份
 ```
 
 已知邊界:connector 端到端與 Cloud Run 冷啟待真環境驗收(runbook §4);
