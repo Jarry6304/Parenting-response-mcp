@@ -103,3 +103,63 @@ async def test_resume_surfaces_safety_mode(client: Client) -> None:
     sid = r["session_id"]
     r2 = data_of(await client.call_tool("constraints", {"mode": "resume", "session_id": sid}))
     assert r2["safety_mode"] is True and r2["next"] == "prerequisites"
+
+
+# ── D 件:收束 ask-gate + round 軟上限 ───────────────────────────
+
+
+async def test_convergence_ask_gate_then_continue(client: Client, db: MemoryDatabase) -> None:
+    """上輪 converged=true → 本輪 ③ 回收束 ask-gate(不記輪);
+    帶 parent_decision=continue → 照常記輪。"""
+    sid = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid})
+    r1 = data_of(await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": "鬆動配合"}))
+    assert r1["converged"] is True
+    r2 = data_of(await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": "否認堅持"}))
+    assert r2["requires"] == "parent_decision"
+    assert r2["options"] == ["continue", "finalize"]
+    assert len(await db.get_rounds(sid)) == 2  # ask-gate 不落輪
+    r3 = data_of(await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": "否認堅持", "parent_decision": "continue"}))
+    assert "response_tags" in r3
+    assert len(await db.get_rounds(sid)) == 3
+
+
+async def test_convergence_gate_then_finalize_path(client: Client) -> None:
+    """收束 ask-gate 後家長選收尾:直接 ④ 正常落庫(gate 不影響 finalize)。"""
+    sid = await ready_session(client)
+    await client.call_tool("core_tags", {"session_id": sid})
+    await client.call_tool("core_tags", {"session_id": sid, "child_reaction": "鬆動配合"})
+    r = data_of(await client.call_tool("finalize", {
+        "session_id": sid, "outcome": "resolved", "draft": "我們一起想了辦法。"}))
+    assert "record_id" in r
+
+
+async def test_convergence_gate_live_only(client: Client) -> None:
+    """rehearsal 不觸發收束 gate(無真實乒乓);parent_decision 亂寫 → E_INVALID_STATE。"""
+    sid = await open_session(client, mode="rehearsal")
+    await client.call_tool("prerequisites", prereq_args(sid))
+    await client.call_tool("core_tags", {"session_id": sid})
+    await client.call_tool("core_tags", {"session_id": sid, "child_reaction": "鬆動配合"})
+    r = data_of(await client.call_tool("core_tags", {
+        "session_id": sid, "child_reaction": "否認堅持"}))  # 無需 decision
+    assert "response_tags" in r
+    with pytest.raises(ToolError, match="E_INVALID_STATE"):
+        await client.call_tool("core_tags", {
+            "session_id": sid, "child_reaction": "否認堅持", "parent_decision": "亂寫"})
+
+
+async def test_round_soft_cap_suggests_pause(client: Client) -> None:
+    """第 5 輪起回傳附 suggest_pause=true(軟上限:建議不強制,FSM 照走)。"""
+    sid = await ready_session(client)
+    r = data_of(await client.call_tool("core_tags", {"session_id": sid}))
+    for i in range(1, 7):
+        args: dict[str, object] = {"session_id": sid, "child_reaction": "否認堅持"}
+        r = data_of(await client.call_tool("core_tags", args))
+        if i < 5:
+            assert "suggest_pause" not in r, i
+        else:
+            assert r["suggest_pause"] is True, i  # 第 5 輪起建議暫停
+    assert "response_tags" in r  # 不擋:TAG 照回

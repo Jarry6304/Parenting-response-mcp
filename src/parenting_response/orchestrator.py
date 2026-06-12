@@ -59,6 +59,7 @@ REACTION_PRIMARY: dict[str, tuple[str, ...]] = {
 
 # D3 投影:高張力反應後的第一個「鬆動配合」不算收斂(討好式順從防線)
 _HIGH_TENSION_REACTIONS = {"情緒爆發", "退縮害怕"}
+ROUND_SOFT_CAP = 5  # v3.2 D 件:乒乓軟上限(第 5 輪起建議暫停,不強制)
 
 # record_id 的「當日」= 臺北日,與部署主機時區無關(record-schema);
 # 台灣自 1980 無夏令時,固定 +8 免 tzdata 依賴
@@ -255,6 +256,7 @@ class Orchestrator:
 
     async def core_tags(
         self, *, session_id: str, child_reaction: str | None, reaction_note: str | None,
+        parent_decision: str | None = None,
     ) -> dict[str, Any]:
         s = await self._require_stage(session_id, "ready")
         rounds = await self.db.get_rounds(session_id)
@@ -264,6 +266,9 @@ class Orchestrator:
         is_retro = str(s["mode"]) == "retro"
         if is_retro and round_no > 0:
             raise PRError(E_INVALID_STATE, "retro 覆盤限一輪(③×1);後續請直接 finalize")
+        if parent_decision is not None and parent_decision != "continue":
+            raise PRError(E_INVALID_STATE,
+                          'parent_decision 僅受 "continue"(要收尾請直接呼 finalize)')
 
         rf: Redflag | None = None
         warning_hit = False
@@ -273,6 +278,16 @@ class Orchestrator:
         else:  # 乒乓輪需 reaction
             if child_reaction not in CHILD_REACTIONS:
                 raise PRError(E_INVALID_STATE, f"child_reaction 須 ∈ 六類:{child_reaction}")
+            # v3.2 D 件收束 ask-gate:上輪已收斂(讀上輪 synthesis_trace,不重算)
+            # 且家長未明示繼續 → 停一拍問人,不記輪。僅 live——rehearsal 無真實
+            # 乒乓、retro ×1 無上輪。
+            prev_trace: dict[str, Any] = rounds[-1].get("synthesis_trace") or {}
+            if (str(s["mode"]) == "live" and parent_decision != "continue"
+                    and prev_trace.get("converged") is True):
+                return {"requires": "parent_decision",
+                        "options": ["continue", "finalize"],
+                        "ask": "上一輪孩子已鬆動配合(已收斂)。要繼續這一輪(continue),"
+                               "還是先收尾記錄(改呼 finalize)?"}
             # 高張力輪強制轉述(硬閘,與 ② script_decision 同型):紅旗複檢的風險
             # 集中在高張力輪,G0 有效性不可繫於 host 自律;非高張力無轉述 → 跳過複檢(已知軟點)。
             if child_reaction in _HIGH_TENSION_REACTIONS and not reaction_note:
@@ -335,6 +350,8 @@ class Orchestrator:
         if rf is not None:  # 本輪命中:轉介必達
             result["redflag"] = rf.model_dump()
             result["referral"] = rf.referral
+        if round_no >= ROUND_SOFT_CAP:  # D 件軟上限:建議暫停,不擋(乒乓拖長 = 雙方都累)
+            result["suggest_pause"] = True
         return result
 
     # ── ④ finalize(終態;一般 / short) ──────────────────────────

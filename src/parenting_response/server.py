@@ -82,6 +82,7 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         session_id: str,
         child_reaction: str | None = None,
         reaction_note: str | None = None,
+        parent_decision: str | None = None,
     ) -> dict[str, Any]:
         """③ 各核心條件(乒乓,可 ×n)。
 
@@ -90,12 +91,14 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         round 0 = NULL 反應;round>0 對 reaction_note 複檢 G0——命中為訊號
         (v3.2:不停案,照常記輪),該輪起回傳換 safety_tags 安全約束集
         (陪伴/傾聽/降溫+轉介),不出一般管教 TAG。
+        上輪已收斂(live)→ 回收束 ask-gate:家長要繼續須帶
+        parent_decision="continue",要收尾改呼 finalize。第 5 輪起附 suggest_pause。
         child_reaction ∈ 鬆動配合|否認堅持|情緒爆發|退縮害怕|反問試探|轉移打岔。
         """
         try:
             return await orch.core_tags(
                 session_id=session_id, child_reaction=child_reaction,
-                reaction_note=reaction_note,
+                reaction_note=reaction_note, parent_decision=parent_decision,
             )
         except PRError as exc:
             raise ToolError(str(exc)) from exc
