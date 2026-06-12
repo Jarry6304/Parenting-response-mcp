@@ -6,9 +6,13 @@ v3.0 零 LLM:核心輸出契約、卡、合成 trace 模型全數移除;
 
 from __future__ import annotations
 
+import datetime as _dt
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
+# 「當日/季/年」一律錨臺北(+8 固定無 DST):record_id 取號與報告期界共用
+TZ_TAIPEI = _dt.timezone(_dt.timedelta(hours=8))
 
 # ── 錯誤碼(spec v3.0:違序 / 缺軸 / 連結) ────────────────────────
 

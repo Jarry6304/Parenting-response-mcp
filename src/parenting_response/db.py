@@ -48,7 +48,7 @@ RECORD_COLUMNS: tuple[str, ...] = (
 DDL_EVENTS = """
 CREATE TABLE IF NOT EXISTS events (
     event_id   BIGSERIAL PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(session_id),
+    session_id TEXT REFERENCES sessions(session_id),
     kind       TEXT NOT NULL,
     payload    JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -71,6 +71,28 @@ CREATE TABLE IF NOT EXISTS raw_transcripts (
     UNIQUE (session_id, content_hash)
 );
 CREATE INDEX IF NOT EXISTS raw_transcripts_session_idx ON raw_transcripts (session_id);
+"""
+
+# 報告定稿(v3.2 F 件;同 ref 多版,version 遞增,最新版為「定稿」):
+# body 為確定性組裝全文(TEXT,0007 加密就緒);meta 存聚合快照/slots/語意警示
+# (季報回放讀上一季 meta.semantic_warnings)。0006 遷移與 ensure_schema 共用。
+DDL_REPORTS = """
+CREATE TABLE IF NOT EXISTS reports (
+    report_id  BIGSERIAL PRIMARY KEY,
+    scope      TEXT NOT NULL,
+    ref_key    TEXT NOT NULL,
+    version    INT NOT NULL,
+    body       TEXT NOT NULL,
+    meta       TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (scope, ref_key, version)
+);
+"""
+
+# v3.2 0006:報告級/auth 事件無 session 錨(payload 帶 ref_key/sub)→
+# events.session_id 放寬可空;reports 表見 DDL_REPORTS。
+DDL_MIGRATE_0006 = """
+ALTER TABLE events ALTER COLUMN session_id DROP NOT NULL;
 """
 
 DDL = """
@@ -135,7 +157,7 @@ CREATE TABLE IF NOT EXISTS records (
     redflag          BOOLEAN NOT NULL DEFAULT false,
     parent_action    TEXT
 );
-""" + DDL_EVENTS + DDL_TRANSCRIPTS
+""" + DDL_EVENTS + DDL_TRANSCRIPTS + DDL_REPORTS
 
 # v2.2 → v3.0 既有資料庫升級(冪等;migration 0002 與 ensure_schema 共用,單一來源)。
 # 0001 動態 import 本檔 DDL,全新庫在 0001 即得 v3 形狀,本塊必須可 no-op。
@@ -183,12 +205,25 @@ class Database(Protocol):
     async def get_record_by_session(self, session_id: str) -> dict[str, Any] | None: ...
     async def count_records_with_prefix(self, prefix: str) -> int: ...
     async def expire_stale_sessions(self, cutoff: _dt.datetime) -> int: ...
-    async def log_event(self, session_id: str, kind: str, payload: dict[str, Any]) -> None: ...
+    async def log_event(self, session_id: str | None, kind: str, payload: dict[str, Any]) -> None: ...
     async def get_events(self, session_id: str) -> list[dict[str, Any]]: ...
     async def insert_transcript(
         self, session_id: str, *, chunk_no: int, content_hash: str, turns_json: str,
     ) -> int | None: ...
     async def get_transcripts(self, session_id: str) -> list[dict[str, Any]]: ...
+    async def list_sessions_between(
+        self, start: _dt.datetime, end: _dt.datetime,
+    ) -> list[dict[str, Any]]: ...
+    async def list_records_between(
+        self, start: _dt.datetime, end: _dt.datetime,
+    ) -> list[dict[str, Any]]: ...
+    async def list_rounds_for_sessions(
+        self, session_ids: list[str],
+    ) -> dict[str, list[dict[str, Any]]]: ...
+    async def get_report_latest(self, scope: str, ref_key: str) -> dict[str, Any] | None: ...
+    async def insert_report(
+        self, scope: str, ref_key: str, *, body: str, meta_json: str,
+    ) -> dict[str, Any]: ...
     async def finalize_tx(
         self, session_id: str, *, terminal_status: str,
         session_updates: dict[str, Any], record_row: dict[str, Any],
@@ -206,6 +241,7 @@ class MemoryDatabase:
         self._records_by_session: dict[str, str] = {}
         self._events: list[dict[str, Any]] = []
         self._transcripts: dict[str, list[dict[str, Any]]] = {}
+        self._reports: list[dict[str, Any]] = []
 
     async def create_session(self, row: dict[str, Any]) -> None:
         async with self._lock:
@@ -286,7 +322,7 @@ class MemoryDatabase:
                 n += 1
             return n
 
-    async def log_event(self, session_id: str, kind: str, payload: dict[str, Any]) -> None:
+    async def log_event(self, session_id: str | None, kind: str, payload: dict[str, Any]) -> None:
         async with self._lock:
             self._events.append({
                 "event_id": len(self._events) + 1, "session_id": session_id,
@@ -296,6 +332,42 @@ class MemoryDatabase:
 
     async def get_events(self, session_id: str) -> list[dict[str, Any]]:
         return [dict(e) for e in self._events if e["session_id"] == session_id]
+
+    async def list_sessions_between(
+        self, start: _dt.datetime, end: _dt.datetime,
+    ) -> list[dict[str, Any]]:
+        return [dict(s) for s in self._sessions.values()
+                if start <= s["created_at"] < end]
+
+    async def list_records_between(
+        self, start: _dt.datetime, end: _dt.datetime,
+    ) -> list[dict[str, Any]]:
+        return [dict(r) for r in self._records.values()
+                if start <= r["created_at"] < end]
+
+    async def list_rounds_for_sessions(
+        self, session_ids: list[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        return {sid: [dict(r) for r in self._rounds.get(sid, [])] for sid in session_ids}
+
+    async def get_report_latest(self, scope: str, ref_key: str) -> dict[str, Any] | None:
+        rows = [r for r in self._reports if r["scope"] == scope and r["ref_key"] == ref_key]
+        return dict(max(rows, key=lambda r: r["version"])) if rows else None
+
+    async def insert_report(
+        self, scope: str, ref_key: str, *, body: str, meta_json: str,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            prev = [r["version"] for r in self._reports
+                    if r["scope"] == scope and r["ref_key"] == ref_key]
+            row = {
+                "report_id": len(self._reports) + 1, "scope": scope, "ref_key": ref_key,
+                "version": (max(prev) + 1) if prev else 1,
+                "body": body, "meta": meta_json,
+                "created_at": _dt.datetime.now(_dt.timezone.utc),
+            }
+            self._reports.append(row)
+            return dict(row)
 
     async def insert_transcript(
         self, session_id: str, *, chunk_no: int, content_hash: str, turns_json: str,
@@ -330,7 +402,9 @@ class MemoryDatabase:
                 raise UniqueViolation(f"session {session_id} 已有 record")
             session["status"] = terminal_status
             session.update(session_updates)
-            self._records[rid] = dict(record_row)
+            stored = dict(record_row)
+            stored.setdefault("created_at", _dt.datetime.now(_dt.timezone.utc))  # PG: DEFAULT now()
+            self._records[rid] = stored
             self._records_by_session[session_id] = rid
             return True
 
@@ -354,6 +428,7 @@ class PgDatabase:
             await conn.execute(DDL)
             await conn.execute(DDL_MIGRATE)       # 既有 v2.2 庫直接開機也補齊 v3.0 欄位
             await conn.execute(DDL_MIGRATE_0004)  # 既有 v3.0 庫補齊 v3.2 欄位(冪等)
+            await conn.execute(DDL_MIGRATE_0006)  # events.session_id 放寬可空(冪等)
 
     @staticmethod
     def _jsonb(value: Any) -> Any:
@@ -466,7 +541,7 @@ class PgDatabase:
             )
             return cur.rowcount
 
-    async def log_event(self, session_id: str, kind: str, payload: dict[str, Any]) -> None:
+    async def log_event(self, session_id: str | None, kind: str, payload: dict[str, Any]) -> None:
         async with self._pool.connection() as conn:
             await conn.execute(
                 "INSERT INTO events (session_id, kind, payload) VALUES (%s, %s, %s)",
@@ -503,6 +578,70 @@ class PgDatabase:
                 (session_id,),
             )
             return await self._fetchall_dicts(cur)
+
+    async def list_sessions_between(
+        self, start: _dt.datetime, end: _dt.datetime,
+    ) -> list[dict[str, Any]]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT * FROM sessions WHERE created_at >= %s AND created_at < %s",
+                (start, end),
+            )
+            return await self._fetchall_dicts(cur)
+
+    async def list_records_between(
+        self, start: _dt.datetime, end: _dt.datetime,
+    ) -> list[dict[str, Any]]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT * FROM records WHERE created_at >= %s AND created_at < %s",
+                (start, end),
+            )
+            return await self._fetchall_dicts(cur)
+
+    async def list_rounds_for_sessions(
+        self, session_ids: list[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        if not session_ids:
+            return {}
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT * FROM rounds WHERE session_id = ANY(%s) ORDER BY session_id, round_no",
+                (session_ids,),
+            )
+            rows = await self._fetchall_dicts(cur)
+        out: dict[str, list[dict[str, Any]]] = {sid: [] for sid in session_ids}
+        for r in rows:
+            out[str(r["session_id"])].append(r)
+        return out
+
+    async def get_report_latest(self, scope: str, ref_key: str) -> dict[str, Any] | None:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM reports WHERE scope = %s AND ref_key = %s
+                ORDER BY version DESC LIMIT 1
+                """,
+                (scope, ref_key),
+            )
+            return await self._fetchone_dict(cur)
+
+    async def insert_report(
+        self, scope: str, ref_key: str, *, body: str, meta_json: str,
+    ) -> dict[str, Any]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                INSERT INTO reports (scope, ref_key, version, body, meta)
+                SELECT %s, %s, COALESCE(MAX(version), 0) + 1, %s, %s
+                FROM reports WHERE scope = %s AND ref_key = %s
+                RETURNING report_id, scope, ref_key, version, body, meta, created_at
+                """,
+                (scope, ref_key, body, meta_json, scope, ref_key),
+            )
+            row = await self._fetchone_dict(cur)
+            assert row is not None
+            return row
 
     async def finalize_tx(
         self, session_id: str, *, terminal_status: str,

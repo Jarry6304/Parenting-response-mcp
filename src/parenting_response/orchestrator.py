@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import datetime as _dt
 import hashlib
+import json
 import uuid
 from typing import Any
 
+from . import report, report_core
 from .cores import inquiry_probes, red_line_union, response_tags, review_tags, safety_cards
 from .db import Database, UniqueViolation, dump_json
 from .redflag import check_shortcircuit, check_warning
@@ -37,6 +39,7 @@ from .schema import (
     RESPONSE_CORES,
     SCRIPT_DECISIONS,
     SEVERITY_ORDER,
+    TZ_TAIPEI,
     PRError,
     Redflag,
 )
@@ -47,6 +50,7 @@ from .wordlists import (
     REFERRAL_TEXT,
     find_output_violations,
     find_tool_markup,
+    semantic_warnings,
 )
 
 # 反應二級強調(單一來源 = spec v3.0「反應二級強調」表;此處為 code 投影,僅含 6 回應核心)
@@ -65,7 +69,7 @@ ROUND_SOFT_CAP = 5  # v3.2 D 件:乒乓軟上限(第 5 輪起建議暫停,不強
 
 # record_id 的「當日」= 臺北日,與部署主機時區無關(record-schema);
 # 台灣自 1980 無夏令時,固定 +8 免 tzdata 依賴
-_TZ_TAIPEI = _dt.timezone(_dt.timedelta(hours=8))
+_TZ_TAIPEI = TZ_TAIPEI  # 別名保留(record_id 當日錨;單一來源 = schema.TZ_TAIPEI)
 
 
 class Orchestrator:
@@ -508,6 +512,197 @@ class Orchestrator:
             result["redflag"] = rf.model_dump()
             result["referral"] = rf.referral
         return result
+
+    # ── report(v3.2 F+H 件:聚合 phase1 / 驗證組裝 phase2) ─────────
+
+    async def report(
+        self, *, scope: str, ref: str, slots: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """報告兩段式:slots 缺 → phase1(聚合+骨架+guardian);
+        slots 給 → phase2(五道驗證 → 確定性組裝 → 落庫 version+1)。"""
+        if scope not in report_core.REPORT_SCOPES:
+            raise PRError(E_MISSING_AXIS, f"scope 須 ∈ event|quarter|year:{scope}")
+        ctx = await self._report_context(scope, ref)
+        if slots is None:
+            return self._report_phase1(scope, ref, ctx)
+        return await self._report_phase2(scope, ref, ctx, slots)
+
+    async def _report_context(self, scope: str, ref: str) -> dict[str, Any]:
+        """聚合與 fixed 節素材(phase1/2 共用;同庫態同結果)。"""
+        secs = report_core.sections(scope)
+        ctx: dict[str, Any] = {"sections": secs}
+        if scope == "event":
+            s = await self.db.get_session(ref)
+            rec = await self.db.get_record_by_session(ref)
+            if s is None or rec is None:
+                raise PRError(E_INVALID_STATE,
+                              f"event 報告需已收案的 session(④ 完成):{ref}")
+            rounds = await self.db.get_rounds(ref)
+            agg = report.aggregate_event(s, rec, rounds)
+            agg["redflag_hits"] = sum(
+                1 for e in await self.db.get_events(ref) if e["kind"] == "g0_shortcircuit")
+            ctx["aggregates"] = agg
+            ctx["leak_texts"] = []  # event 為單案敘事,鼓勵引用,不做防滲
+            return ctx
+
+        if scope == "quarter" and not report.QUARTER_RE.fullmatch(ref):
+            raise PRError(E_MISSING_AXIS, f"quarter ref 格式須 YYYYQ1-4:{ref}")
+        if scope == "year" and not report.YEAR_RE.fullmatch(ref):
+            raise PRError(E_MISSING_AXIS, f"year ref 格式須 YYYY:{ref}")
+        start, end = report.period_bounds(scope, ref)
+        sessions = await self.db.list_sessions_between(start, end)
+        records = await self.db.list_records_between(start, end)
+        rounds_by = await self.db.list_rounds_for_sessions([str(s["session_id"]) for s in sessions])
+        ctx["aggregates"] = report.aggregate_period(sessions, records, rounds_by)
+
+        # 防滲基(隱私降階):匯總報告 slot 不得內含期內任何單案自由文本原文
+        texts: list[str] = []
+        for s in sessions:
+            texts.extend(str(s.get(k) or "") for k in ("facts", "emotion", "parent_action"))
+        for rec in records:
+            texts.extend(str(rec.get(k) or "") for k in
+                         ("draft", "outcome_note", "parent_self_note", "followup"))
+        for rs in rounds_by.values():
+            texts.extend(str(r.get("reaction_note") or "") for r in rs)
+        for s in sessions:
+            for t in await self.db.get_transcripts(str(s["session_id"])):
+                texts.append(str(t["turns"]))
+        ctx["leak_texts"] = [t for t in texts if t]
+
+        if scope == "quarter":
+            prev_ref = self._prev_quarter(ref)
+            prev = await self.db.get_report_latest("quarter", prev_ref)
+            ctx["prev_ref"] = prev_ref
+            ctx["prev_warnings"] = (
+                json.loads(str(prev["meta"])).get("semantic_warnings", []) if prev else [])
+        else:  # year:拉四季最新版;缺季照常出報,quarters_recap 標示
+            qrefs = [f"{ref}Q{i}" for i in range(1, 5)]
+            found = {q: r for q in qrefs
+                     if (r := await self.db.get_report_latest("quarter", q)) is not None}
+            ctx["quarter_refs"] = qrefs
+            ctx["quarters_found"] = found
+            ctx["missing_quarters"] = [q for q in qrefs if q not in found]
+        return ctx
+
+    def _fixed_contents(self, scope: str, ref: str, ctx: dict[str, Any]) -> dict[str, str]:
+        agg: dict[str, Any] = ctx["aggregates"]
+        out: dict[str, str] = {}
+        for sec in ctx["sections"]:
+            if sec["type"] != "fixed":
+                continue
+            sid = str(sec["id"])
+            if sid == "safety":
+                n = int(agg["redflag_hits"] if scope == "event" else agg["redflag_count"])
+                out[sid] = report.fill_safety_template(str(sec["template"]), n)
+            elif scope == "event" and sid == "overview":
+                out[sid] = report.render_event_overview(agg)
+            elif sid == "stats":
+                out[sid] = report.render_period_stats(agg, "本季" if scope == "quarter" else "全年")
+            elif sid == "prev_audit":
+                out[sid] = report.render_prev_audit(ctx.get("prev_warnings"))
+            elif sid == "quarters_recap":
+                out[sid] = report.render_quarters_recap(ctx["quarter_refs"], ctx["quarters_found"])
+        return out
+
+    def _report_phase1(self, scope: str, ref: str, ctx: dict[str, Any]) -> dict[str, Any]:
+        fixed = self._fixed_contents(scope, ref, ctx)
+        skeleton: list[dict[str, Any]] = []
+        for sec in ctx["sections"]:
+            item = dict(sec)
+            if sec["type"] == "fixed":
+                item["content"] = fixed[str(sec["id"])]
+            skeleton.append(item)
+        result: dict[str, Any] = {
+            "scope": scope, "ref": ref,
+            "aggregates": ctx["aggregates"],
+            "skeleton": skeleton,
+            "guardian": report_core.guardian(),  # H 件第三層:生成前自查
+            "next": "report(slots)",
+        }
+        if scope == "event":
+            result["raw_quota"] = report_core.validation()["raw_quota_event"]
+        if scope == "quarter":
+            result["prev_audit"] = {"ref": ctx["prev_ref"], "warnings": ctx["prev_warnings"]}
+        if scope == "year":
+            result["missing_quarters"] = ctx["missing_quarters"]
+        return result
+
+    async def _report_phase2(
+        self, scope: str, ref: str, ctx: dict[str, Any], slots: dict[str, str],
+    ) -> dict[str, Any]:
+        v = report_core.validation()
+        slot_secs = {str(s["id"]): s for s in ctx["sections"] if s["type"] == "slot"}
+
+        # 1) 槽齊備且無多餘鍵(host 不得自創章節、不得碰 fixed)
+        missing = sorted(set(slot_secs) - set(slots))
+        extra = sorted(set(slots) - set(slot_secs))
+        if missing or extra:
+            raise PRError(E_MISSING_AXIS, f"slots 不齊:缺 {missing or '無'} / 多 {extra or '無'}")
+        # 2) 字數上限
+        for sid, text in slots.items():
+            cap = int(slot_secs[sid]["max_chars"])
+            if len(text) > cap:
+                return {"rejected": True, "violations": [
+                    {"slot": sid, "kind": "over_length", "limit": cap, "got": len(text)}],
+                    "hint": "超出字數上限,請精煉後重交(不落庫)"}
+        # 3) 負面清單 ∪ 輸出禁用 pattern(拒收)
+        violations: list[dict[str, Any]] = []
+        for sid, text in slots.items():
+            neg = v["negative_re"].findall(text)
+            pat = find_output_violations(text)
+            for hit in (*neg, *pat):
+                violations.append({"slot": sid, "kind": "forbidden_term", "term": hit})
+        # 4) 數字白名單(僅匯總級:防 host 自創統計)
+        if scope in v["number_whitelist_scopes"]:
+            allowed = report.whitelist_numbers(ctx["aggregates"], ref)
+            for sid, text in slots.items():
+                for num in sorted(report.numbers_in(text) - allowed):
+                    violations.append({"slot": sid, "kind": "number_not_in_aggregates",
+                                       "term": num})
+            # 5) 防滲(僅匯總級):slot 不得內含期內單案自由文本的連續原文
+            windows = report.leak_windows(ctx["leak_texts"], int(v["leak_window"]))
+            for sid, text in slots.items():
+                leak = report.find_leak(text, windows, int(v["leak_window"]))
+                if leak is not None:
+                    violations.append({"slot": sid, "kind": "raw_text_leak", "term": leak})
+        if violations:
+            await self.db.log_event(None, "report_rejected", {
+                "scope": scope, "ref_key": ref, "violations": violations})
+            return {"rejected": True, "violations": violations,
+                    "hint": "slot 未過驗證,請依 violations 修正後重交(不落庫)"}
+
+        # H 件第一層 tripwire:語意警示——警告不拒收,稽核 + 存 meta(下期回放)
+        warnings: list[dict[str, str]] = []
+        for sid, text in slots.items():
+            for w in semantic_warnings(text):
+                warnings.append({**w, "slot": sid})
+        if warnings:
+            await self.db.log_event(None, "report_semantic_warning", {
+                "scope": scope, "ref_key": ref, "warnings": warnings})
+
+        contents = self._fixed_contents(scope, ref, ctx)
+        contents.update(slots)
+        body = report.assemble_body(scope, ref, ctx["sections"], contents)
+        row = await self.db.insert_report(
+            scope, ref, body=body,
+            meta_json=report.meta_json(ctx["aggregates"], slots, warnings))
+        await self.db.log_event(None, "report_audit", {
+            "scope": scope, "ref_key": ref, "version": row["version"],
+            "semantic_warning_count": len(warnings)})
+        result: dict[str, Any] = {
+            "report_id": row["report_id"], "scope": scope, "ref": ref,
+            "version": row["version"], "body": body,
+        }
+        if warnings:
+            result["semantic_warnings"] = warnings
+        return result
+
+    @staticmethod
+    def _prev_quarter(ref: str) -> str:
+        m = report.QUARTER_RE.fullmatch(ref)
+        assert m is not None
+        year, q = int(m.group(1)), int(m.group(2))
+        return f"{year - 1}Q4" if q == 1 else f"{year}Q{q - 1}"
 
     # ── 共用守衛 / 終態 ───────────────────────────────────────────
 

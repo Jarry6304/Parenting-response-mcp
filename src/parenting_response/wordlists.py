@@ -54,6 +54,36 @@ G0_WARNING_PHRASES: tuple[str, ...] = (
     "衣架", "棍子拿來", "愛的小手", "手伸出來", "揍你", "打到你乖", "欠揍", "罰跪", "罰站到",
 )
 
+# ── 語意紅線(v3.2 H 件):報告 slot 的「主詞+負面定性」tripwire ──
+# 第一層:警告不拒收——子句同時含孩子主詞與評價詞、且無否定前綴 → 記
+# semantic_warnings(events 稽核 + 下期季報回放)。詞表從嚴列「人格定性」詞,
+# 不含行為描述詞(「打人」是行為,「壞」是定性)。
+
+SEMANTIC_SUBJECT_RE = re.compile(r"孩子|兒子|女兒|哥哥|弟弟|姊姊|妹妹|他|她")
+SEMANTIC_EVAL_TERMS: tuple[str, ...] = (
+    "懶", "笨", "壞", "故意", "難搞", "難帶", "講不聽", "不受教", "沒救",
+    "白目", "欠管", "皮在癢", "屢勸不聽", "無可救藥", "問題兒童",
+)
+SEMANTIC_NEG_PREFIX_RE = re.compile(r"不是|並非|沒有|不再|不會|很少")
+_CLAUSE_SPLIT_RE = re.compile(r"[,。;!?\n,;!?]")
+
+
+def semantic_warnings(text: str) -> list[dict[str, str]]:
+    """語意 tripwire:回 [{clause, term}](空 = 乾淨)。子句粒度判定,
+    否定前綴(「他不是故意的」)豁免。"""
+    hits: list[dict[str, str]] = []
+    for clause in _CLAUSE_SPLIT_RE.split(text):
+        if not clause.strip() or not SEMANTIC_SUBJECT_RE.search(clause):
+            continue
+        if SEMANTIC_NEG_PREFIX_RE.search(clause):
+            continue
+        for term in SEMANTIC_EVAL_TERMS:
+            if term in clause:
+                hits.append({"clause": clause.strip(), "term": term})
+                break
+    return hits
+
+
 # ── ⑤ archive 防滲(v3.2 E 件):工具協議標記不得混入逐字稿 ──────
 # 錨定「協議標記」而非語意:逐字稿是家長與 host 的對話原文,任何
 # function-call / tool-use 結構出現即代表 host 把工具軌道誤倒進來(或偽造),

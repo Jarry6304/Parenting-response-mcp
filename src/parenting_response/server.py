@@ -154,7 +154,27 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         except PRError as exc:
             raise ToolError(str(exc)) from exc
 
-    _registered = (constraints, prerequisites, core_tags, finalize, archive)  # @mcp.tool 註冊
+    @mcp.tool
+    async def report(
+        scope: str,
+        ref: str,
+        slots: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """報告(v3.2;兩段式)。scope ∈ event|quarter|year;
+        ref = session_id|YYYYQn|YYYY。
+
+        phase1(slots 缺):回 {aggregates(九維聚合), skeleton(章節骨架:
+        fixed 已組裝 / slot 待填+字數上限+hint), guardian(生成前自查)}。
+        phase2(slots 給):五道驗證(槽齊備/字數/負面清單/數字白名單/
+        原文防滲)→ 確定性組裝 → 落庫 version+1 回 body;
+        語意警示(主詞+負面定性)warning 不拒收,稽核並於下季回放。
+        """
+        try:
+            return await orch.report(scope=scope, ref=ref, slots=slots)
+        except PRError as exc:
+            raise ToolError(str(exc)) from exc
+
+    _registered = (constraints, prerequisites, core_tags, finalize, archive, report)
     del _registered
     return mcp
 
