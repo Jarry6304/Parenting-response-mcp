@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from .schema import Redflag
-from .wordlists import REFERRAL_TEXT, find_shortcircuit, find_warnings
+from .wordlists import REFERRAL_TEXT, find_shortcircuit, find_warnings, vector_of
 
 # (欄位名, 文本) 對;欄位名進 reason 與稽核 payload
 LabeledTexts = Iterable[tuple[str, str | None]]
@@ -24,7 +24,7 @@ def _excerpt(text: str, phrase: str, margin: int = 12) -> str:
 
 
 def check_shortcircuit(fields: LabeledTexts) -> Redflag | None:
-    """短路級:任一欄位命中 → 停案(①③)或轉介必達(④);攜帶證據鏈。"""
+    """短路級(v3.2 A 件:訊號不停案):任一欄位命中 → 旗標+轉介必達;攜帶證據鏈與風險向。"""
     for field, text in fields:
         if not text:
             continue
@@ -34,6 +34,7 @@ def check_shortcircuit(fields: LabeledTexts) -> Redflag | None:
                 hit=True, reason=f"G0 短路級詞組命中({field}):「{phrase}」",
                 referral=REFERRAL_TEXT,
                 field=field, phrase=phrase, excerpt=_excerpt(text, phrase),
+                vector=vector_of(phrase),
             )
     return None
 

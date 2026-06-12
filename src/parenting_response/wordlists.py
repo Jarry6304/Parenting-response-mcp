@@ -10,20 +10,40 @@ from __future__ import annotations
 
 import re
 
-# ── G0 短路級(命中 → 停案 + 轉介;從嚴,寧誤停由人覆核) ──────────
+# ── G0 短路級(v3.2 A 件:命中 → 訊號,不停案;轉介必達 + safety_mode) ──
+# 風險向(spec v3.2 G 件):命中組自然攜帶 child / parent / third,
+# 決定 ③ safety_mode 組卡用哪張底座卡;詞面無法消歧主語(如「打到瘀青」
+# 可能家長自陳),取語意最可能向,known limitation 文件如實陳述。
 
-G0_SHORTCIRCUIT_PHRASES: tuple[str, ...] = (
-    # 兒少自傷/自殺意念
-    "不想活", "想死", "想消失", "自殘", "割手", "割腕",
-    # 傷人傷物升級
-    "持械", "掐脖", "虐待動物",
-    # 虐待/疏忽跡象
-    "打到瘀青", "打到受傷", "燙傷", "整天沒吃", "反鎖", "單獨留置", "深夜趕出",
-    # 性相關
-    "不當觸碰", "摸下體",
-    # 家長失控
-    "快忍不住打", "已經失手", "怕自己傷害", "活不下去",
+G0_SHORTCIRCUIT_BY_VECTOR: dict[str, tuple[str, ...]] = {
+    # 孩子自身風險:自傷/自殺意念 + 傷人傷物升級(主體是孩子)
+    "child": (
+        "不想活", "想死", "想消失", "自殘", "割手", "割腕",
+        "持械", "掐脖", "虐待動物",
+    ),
+    # 第三方/目睹:虐待/疏忽跡象 + 性相關(通報義務向)
+    "third": (
+        "打到瘀青", "打到受傷", "燙傷", "整天沒吃", "反鎖", "單獨留置", "深夜趕出",
+        "不當觸碰", "摸下體",
+    ),
+    # 家長端風險:失控/自傷
+    "parent": (
+        "快忍不住打", "已經失手", "怕自己傷害", "活不下去",
+    ),
+}
+
+G0_SHORTCIRCUIT_PHRASES: tuple[str, ...] = tuple(
+    p for phrases in G0_SHORTCIRCUIT_BY_VECTOR.values() for p in phrases
 )
+
+_VECTOR_BY_PHRASE: dict[str, str] = {
+    p: v for v, phrases in G0_SHORTCIRCUIT_BY_VECTOR.items() for p in phrases
+}
+
+
+def vector_of(phrase: str) -> str:
+    """短路詞組 → 風險向(child|parent|third);組卡的唯一判斷來源。"""
+    return _VECTOR_BY_PHRASE[phrase]
 
 # ── G0 警訊級(不停案;severity 升「高」,A3 推導吃) ────────────────
 

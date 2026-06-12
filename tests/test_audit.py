@@ -25,7 +25,8 @@ async def test_g0_at_constraints_logs_evidence(client: Client, db: MemoryDatabas
 async def test_g0_recheck_event_carries_round_and_field(
     client: Client, db: MemoryDatabase
 ) -> None:
-    """③ 複檢命中:event 帶 round_no 與欄位;record 的 outcome_note 也標欄位。"""
+    """③ 複檢命中:event 帶 round_no 與欄位(v3.2 訊號化:不再自動產 record,
+    證據鏈唯一落點 = events)。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
     await client.call_tool("core_tags", {
@@ -36,20 +37,21 @@ async def test_g0_recheck_event_carries_round_and_field(
     p = hit[0]["payload"]
     assert p["source"] == "③" and p["round_no"] == 1
     assert p["field"] == "reaction_note" and p["phrase"] == "想消失"
-    rec = await db.get_record_by_session(sid)
-    assert rec is not None and "reaction_note" in str(rec["outcome_note"])
+    assert p["vector"] == "child"  # 風險向進稽核(組卡緣由可重建)
+    assert await db.get_record_by_session(sid) is None  # 不自動收案
 
 
 async def test_finalize_g0_contact_traceable_without_stopping(
     client: Client, db: MemoryDatabase
 ) -> None:
-    """④ 短路不拒收(#2 取捨)的紅旗接觸案:record 外觀正常,但 events 可列出。"""
+    """④ 短路不拒收(#2 取捨)的紅旗接觸案:record 帶 redflag 旗標,events 可列出。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
     r = data_of(await client.call_tool("finalize", {
         "session_id": sid, "outcome": "partial",
         "draft": "我看到你很生氣,我們先深呼吸。",
         "parent_self_note": "我快忍不住打他了,怕自己傷害孩子",
+        "referral_ack": True,  # v3.2:轉介送達確認
     }))
     assert "record_id" in r  # 案照收
     evs = [e for e in await db.get_events(sid) if e["kind"] == "g0_shortcircuit"]

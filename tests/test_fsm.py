@@ -164,6 +164,7 @@ async def test_stale_open_session_expires_on_next_constraints(
     """#6:逾期 open 案於下次 ① lazy 轉吸收態 expired;不產 record,severity 留存可查。"""
     stale = await ready_session(client)
     db._sessions[stale]["created_at"] -= _dt.timedelta(days=31)
+    db._sessions[stale]["updated_at"] -= _dt.timedelta(days=31)  # v3.2:最後活動錨同步回撥
     fresh = await open_session(client)  # 任一新 ① 觸發清掃
     s = db._sessions[stale]
     assert s["status"] == "expired" and s["stage"] == "expired"

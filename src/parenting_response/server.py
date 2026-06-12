@@ -32,11 +32,12 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         child_id: str = "C1",
         linked_plan_id: str | None = None,
     ) -> dict[str, Any]:
-        """① 約束探詢(內含 G0)。
+        """① 約束探詢(內含 G0 訊號)。
 
         必要:`facts / emotion / mode`(mode ∈ live|rehearsal)。
         過 → 回 {session_id, 禁用詞+紅線約束集, Maslow/Satir 探點}(引導 S1);
-        G0 短路命中 → session=redflag_stopped,回轉介,鎖 ②③④。
+        G0 短路命中(v3.2 訊號,不停案)→ 照常建案,另回 {redflag, referral,
+        safety_mode=true}——轉介請立即向家長送達,後續 ③ 將換安全約束集。
         """
         try:
             return await orch.constraints(
@@ -79,7 +80,9 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
 
         回 6 回應核心 TAG(標 primary/support,依 child_reaction 確定性映射)
         + Erikson/Piaget 查表 stage + converged(code 規則,非 host 自報)。
-        round 0 = NULL 反應;round>0 對 reaction_note 複檢 G0,命中 → redflag_stopped。
+        round 0 = NULL 反應;round>0 對 reaction_note 複檢 G0——命中為訊號
+        (v3.2:不停案,照常記輪),該輪起回傳換 safety_tags 安全約束集
+        (陪伴/傾聽/降溫+轉介),不出一般管教 TAG。
         child_reaction ∈ 鬆動配合|否認堅持|情緒爆發|退縮害怕|反問試探|轉移打岔。
         """
         try:
@@ -100,12 +103,15 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         outcome_note: str | None = None,
         parent_self_note: str | None = None,
         followup: str | None = None,
+        referral_ack: bool | None = None,
     ) -> dict[str, Any]:
         """④ 總結分析(終態)。
 
         一般模式(stage=ready):須交 draft → 禁用詞 pattern_check,過則落 record;
         含禁用詞 → 拒落庫,回違規詞要求重生。
         short 模式(stage=short_pending):不接受 draft,只記事、不跑 pattern_check。
+        紅旗訊號在案(v3.2):須帶 referral_ack=true(轉介已向家長送達),
+        否則 E_MISSING_AXIS;落庫之 record.redflag=true,不進 promotion 鏈。
         outcome ∈ resolved|partial|unresolved|escalated_to_redflag;
         claimed_sources ⊆ 6 回應核心(軟溯源);maslow_need ⊆ 生理|安全|愛與歸屬|尊重
         (① 探點命中之 host 回報)。
@@ -115,7 +121,7 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
                 session_id=session_id, outcome=outcome, draft=draft,
                 claimed_sources=claimed_sources, maslow_need=maslow_need,
                 outcome_note=outcome_note, parent_self_note=parent_self_note,
-                followup=followup,
+                followup=followup, referral_ack=referral_ack,
             )
         except PRError as exc:
             raise ToolError(str(exc)) from exc
