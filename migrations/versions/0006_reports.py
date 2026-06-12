@@ -1,4 +1,4 @@
-"""reports 報告定稿表 + events.session_id 放寬可空(spec v3.2 F/H 件)。
+"""reports 報告定稿表 + events.session_id 放寬可空(spec v3.0 F/H 件)。
 
 reports:同 ref 多版 version 遞增(UNIQUE(scope, ref_key, version)),body 為
 確定性組裝全文(TEXT,0007 加密就緒),meta 存聚合快照/slots/語意警示

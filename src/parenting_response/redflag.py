@@ -24,7 +24,7 @@ def _excerpt(text: str, phrase: str, margin: int = 12) -> str:
 
 
 def check_shortcircuit(fields: LabeledTexts) -> Redflag | None:
-    """短路級(v3.2 A 件:訊號不停案):任一欄位命中 → 旗標+轉介必達;攜帶證據鏈與風險向。"""
+    """短路級(v3.0 A 件:訊號不停案):任一欄位命中 → 旗標+轉介必達;攜帶證據鏈與風險向。"""
     for field, text in fields:
         if not text:
             continue

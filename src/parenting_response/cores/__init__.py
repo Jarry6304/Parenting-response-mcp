@@ -1,6 +1,6 @@
-"""cores 載入器(v3.2):解析 references/cores/tags.md 的學派 TAG 與 safety 約束集。
+"""cores 載入器(v3.0):解析 references/cores/tags.md 的學派 TAG 與 safety 約束集。
 
-單一事實來源 = tags.md(spec v3.2 / cores-tags 契約);本模組只做解析與
+單一事實來源 = tags.md(spec v3.0 / cores-tags 契約);本模組只做解析與
 完整性驗證,**零 LLM、零網路**。改 TAG 改文件,不改 code。
 
 格式(每塊一個 ```text fenced 區塊,塊名容點號):
@@ -25,10 +25,10 @@ _BLOCK_RE = re.compile(r"```text\n(.*?)```", re.DOTALL)
 
 RESPONSE_TAG_KEYS: tuple[str, ...] = ("理念", "套用", "示範", "紅線")
 INQUIRY_TAG_KEYS: tuple[str, ...] = ("探詢", "探點", "示範問", "紅線")
-# v3.2 B 件:retro 覆盤鏡頭(僅 6 回應核心;探詢核心職責是探孩子內心,不作覆盤)
+# v3.0 B 件:retro 覆盤鏡頭(僅 6 回應核心;探詢核心職責是探孩子內心,不作覆盤)
 REVIEW_TAG_KEYS: tuple[str, ...] = ("視角", "操作", "示範")
 
-# v3.2 G 件:3 風險向底座 × 4 年齡 delta = 7 塊全顯式,不允許靜默 fallback
+# v3.0 G 件:3 風險向底座 × 4 年齡 delta = 7 塊全顯式,不允許靜默 fallback
 SAFETY_VECTORS: tuple[str, ...] = ("child", "parent", "third")
 SAFETY_BLOCKS: tuple[str, ...] = (
     *(f"safety.base.{v}" for v in SAFETY_VECTORS),
@@ -81,7 +81,7 @@ def _load() -> dict[str, dict[str, str]]:
             if not fields.get(key):
                 raise RuntimeError(f"{_TAGS_PATH} 學派 {school} 缺欄位或值為空:{key}")
 
-    # v3.2 B 件:覆盤 6 塊 fail-fast(retro ③ 的素材,缺一拒啟動)
+    # v3.0 B 件:覆盤 6 塊 fail-fast(retro ③ 的素材,缺一拒啟動)
     for school in RESPONSE_CORES:
         fields = tags.get(f"{school}.覆盤")
         if fields is None:
@@ -90,7 +90,7 @@ def _load() -> dict[str, dict[str, str]]:
             if not fields.get(key):
                 raise RuntimeError(f"{_TAGS_PATH} 覆盤 {school}.覆盤 缺欄位或值為空:{key}")
 
-    # v3.2 G 件:safety 7 塊 fail-fast——12+ 的 delta 是最關鍵的一塊,
+    # v3.0 G 件:safety 7 塊 fail-fast——12+ 的 delta 是最關鍵的一塊,
     # fallback 等於允許它被遺忘,故缺塊/缺 source 一律拒啟動(「無補充」須顯式)。
     for block in SAFETY_BLOCKS:
         fields = tags.get(block)
@@ -127,13 +127,13 @@ def red_line_union() -> list[dict[str, str]]:
 
 
 def review_tags() -> list[dict[str, Any]]:
-    """retro 覆盤鏡頭(spec v3.2 B 件):6 回應核心各自的「視角/操作/示範」。"""
+    """retro 覆盤鏡頭(spec v3.0 B 件):6 回應核心各自的「視角/操作/示範」。"""
     loaded = _load()
     return [{"school": s, "tag": dict(loaded[f"{s}.覆盤"])} for s in RESPONSE_CORES]
 
 
 def safety_cards(vector: str, age_band: str | None) -> dict[str, Any]:
-    """safety_mode 組卡(spec v3.2 G 件):base.{風險向} (+ delta.{age_band} 僅當 vector=child)。
+    """safety_mode 組卡(spec v3.0 G 件):base.{風險向} (+ delta.{age_band} 僅當 vector=child)。
 
     parent / third 風險向不疊 delta——內容對象非孩子,語域調整無著力點。
     """

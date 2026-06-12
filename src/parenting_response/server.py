@@ -1,4 +1,4 @@
-"""FastMCP server (v3.2):對 host 暴露 6 個編排入口(①-⑤ + report)。
+"""FastMCP server (v3.0):對 host 暴露 6 個編排入口(①-⑤ + report)。
 
 thin server:**零 LLM 呼叫、零 ANTHROPIC_API_KEY**。
 所有「不得違反」由 orchestrator 以 code 斷言(FSM 守衛、G0 訊號、後檢);
@@ -40,7 +40,7 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         mode=resume + session_id → 接手 open 舊案,回三軸與輪摘要(不建新案);
         mode ∈ live|rehearsal|retro → 必要 `facts / emotion`(retro=事後覆盤),
         過 → 回 {session_id, 禁用詞+紅線約束集, Maslow/Satir 探點}(引導 S1);
-        G0 短路命中(v3.2 訊號,不停案)→ 照常建案,另回 {redflag, referral,
+        G0 短路命中(v3.0 訊號,不停案)→ 照常建案,另回 {redflag, referral,
         safety_mode=true}——轉介請立即向家長送達,後續 ③ 將換安全約束集。
         """
         try:
@@ -90,7 +90,7 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         回 6 回應核心 TAG(標 primary/support,依 child_reaction 確定性映射)
         + Erikson/Piaget 查表 stage + converged(code 規則,非 host 自報)。
         round 0 = NULL 反應;round>0 對 reaction_note 複檢 G0——命中為訊號
-        (v3.2:不停案,照常記輪),該輪起回傳換 safety_tags 安全約束集
+        (v3.0:不停案,照常記輪),該輪起回傳換 safety_tags 安全約束集
         (陪伴/傾聽/降溫+轉介),不出一般管教 TAG。
         上輪已收斂(live)→ 回收束 ask-gate:家長要繼續須帶
         parent_decision="continue",要收尾改呼 finalize。第 5 輪起附 suggest_pause。
@@ -121,7 +121,7 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         一般模式(stage=ready):須交 draft → 禁用詞 pattern_check,過則落 record;
         含禁用詞 → 拒落庫,回違規詞要求重生。
         short 模式(stage=short_pending):不接受 draft,只記事、不跑 pattern_check。
-        紅旗訊號在案(v3.2):須帶 referral_ack=true(轉介已向家長送達),
+        紅旗訊號在案(v3.0):須帶 referral_ack=true(轉介已向家長送達),
         否則 E_MISSING_AXIS;落庫之 record.redflag=true,不進 promotion 鏈。
         outcome ∈ resolved|partial|unresolved|escalated_to_redflag;
         claimed_sources ⊆ 6 回應核心(軟溯源);maslow_need ⊆ 生理|安全|愛與歸屬|尊重
@@ -143,7 +143,7 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         chunk_no: int,
         turns: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """⑤ 原始逐字稿歸檔(v3.2;④ 之後的收尾鏈,終態案可補錄)。
+        """⑤ 原始逐字稿歸檔(v3.0;④ 之後的收尾鏈,終態案可補錄)。
 
         turns = [{role: parent|assistant, content: 對話原文}, …](依序)。
         含工具協議標記 → 整 chunk 拒收回明細;同內容重送冪等(duplicate);
@@ -161,7 +161,7 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         ref: str,
         slots: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """報告(v3.2;兩段式)。scope ∈ event|quarter|year;
+        """報告(v3.0;兩段式)。scope ∈ event|quarter|year;
         ref = session_id|YYYYQn|YYYY。
 
         phase1(slots 缺):回 {aggregates(九維聚合), skeleton(章節骨架:
@@ -186,7 +186,7 @@ def main() -> None:
     傳輸 = streamable-HTTP(custom connector 用)。
     AUTH_MODE=local(預設):無閘,**非 loopback 一律拒啟動**(fail-fast);
     AUTH_MODE=authkit:WorkOS AuthKit OAuth + ALLOWED_SUBJECTS allowlist
-    (v3.2 I 件;v3.0 的靜態 bearer 閘已退役)。
+    (v3.0 I 件;v3.0 的靜態 bearer 閘已退役)。
     """
     import asyncio
 

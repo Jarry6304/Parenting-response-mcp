@@ -1,4 +1,4 @@
-"""sessions.caregiver 多照顧者欄(spec v3.2 K 件)。
+"""sessions.caregiver 多照顧者欄(spec v3.0 K 件)。
 
 caregiver ∈ 爸|媽,由已驗 sub 經 CAREGIVER_MAP 映射(不收輸入參數);
 既有列回填 DEFAULT '爸'(單人時期的事實)。報告聚合僅「自照」計數,

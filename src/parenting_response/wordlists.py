@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import re
 
-# ── G0 短路級(v3.2 A 件:命中 → 訊號,不停案;轉介必達 + safety_mode) ──
-# 風險向(spec v3.2 G 件):命中組自然攜帶 child / parent / third,
+# ── G0 短路級(v3.0 A 件:命中 → 訊號,不停案;轉介必達 + safety_mode) ──
+# 風險向(spec v3.0 G 件):命中組自然攜帶 child / parent / third,
 # 決定 ③ safety_mode 組卡用哪張底座卡;詞面無法消歧主語(如「打到瘀青」
 # 可能家長自陳),取語意最可能向,known limitation 文件如實陳述。
 
@@ -54,7 +54,7 @@ G0_WARNING_PHRASES: tuple[str, ...] = (
     "衣架", "棍子拿來", "愛的小手", "手伸出來", "揍你", "打到你乖", "欠揍", "罰跪", "罰站到",
 )
 
-# ── 語意紅線(v3.2 H 件):報告 slot 的「主詞+負面定性」tripwire ──
+# ── 語意紅線(v3.0 H 件):報告 slot 的「主詞+負面定性」tripwire ──
 # 第一層:警告不拒收——子句同時含孩子主詞與評價詞、且無否定前綴 → 記
 # semantic_warnings(events 稽核 + 下期季報回放)。詞表從嚴列「人格定性」詞,
 # 不含行為描述詞(「打人」是行為,「壞」是定性)。
@@ -67,7 +67,7 @@ SEMANTIC_EVAL_TERMS: tuple[str, ...] = (
 SEMANTIC_NEG_PREFIX_RE = re.compile(r"不是|並非|沒有|不再|不會|很少")
 _CLAUSE_SPLIT_RE = re.compile(r"[,。;!?\n,;!?]")
 
-# v3.2 K 件:照顧者比較 tripwire(報告 slot)——「爸爸比媽媽會帶」這類句子
+# v3.0 K 件:照顧者比較 tripwire(報告 slot)——「爸爸比媽媽會帶」這類句子
 # 把教養寫成排名,進 tripwire(警告不拒收;同 H 件回放)。
 CAREGIVER_COMPARE_RE = re.compile(
     r"(?:爸爸?|媽媽?)(?:比|不如|沒有|贏過|輸給)(?:爸爸?|媽媽?)")
@@ -96,7 +96,7 @@ def semantic_warnings(text: str) -> list[dict[str, str]]:
     return hits
 
 
-# ── ⑤ archive 防滲(v3.2 E 件):工具協議標記不得混入逐字稿 ──────
+# ── ⑤ archive 防滲(v3.0 E 件):工具協議標記不得混入逐字稿 ──────
 # 錨定「協議標記」而非語意:逐字稿是家長與 host 的對話原文,任何
 # function-call / tool-use 結構出現即代表 host 把工具軌道誤倒進來(或偽造),
 # 整 chunk 拒收。樣式涵蓋 XML 形(<function…>)與 JSON 形("tool_calls":)。

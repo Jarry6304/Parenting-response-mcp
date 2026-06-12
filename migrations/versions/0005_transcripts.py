@@ -1,4 +1,4 @@
-"""raw_transcripts 原始逐字稿表(spec v3.2 E 件;append-only side-table)。
+"""raw_transcripts 原始逐字稿表(spec v3.0 E 件;append-only side-table)。
 
 turns 存 JSON 文字(TEXT,0007 就地加密就緒);UNIQUE(session_id, content_hash)
 承載 chunk 冪等。不動 records schema_version(side-table 與 events 同理)。

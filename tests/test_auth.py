@@ -1,4 +1,4 @@
-"""v3.2 I 件:AuthKit OAuth + sub allowlist + loopback fail-fast +
+"""v3.0 I 件:AuthKit OAuth + sub allowlist + loopback fail-fast +
 StaticTokenVerifier 退役。JWT 驗章/401 屬 fastmcp 內建不重測;
 connector 端到端驗收列 deploy-runbook(部署後手動)。"""
 

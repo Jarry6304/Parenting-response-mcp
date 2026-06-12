@@ -1,10 +1,10 @@
 # parenting-response MCP
 
-台灣家庭育兒回應系統的 **Thin MCP server(v3.2):零 LLM 呼叫、零 API key**。server 以純 code 強制 6-tool 呼叫順序與安全閘;**6 回應核心**以靜態 TAG 交由 host(Claude)耦合生成,**2 探詢核心(Maslow/Satir)**前移約束探詢做診斷;L0 紀錄落 PostgreSQL(自由文本信封加密)。
+台灣家庭育兒回應系統的 **Thin MCP server(v3.0):零 LLM 呼叫、零 API key**。server 以純 code 強制 6-tool 呼叫順序與安全閘;**6 回應核心**以靜態 TAG 交由 host(Claude)耦合生成,**2 探詢核心(Maslow/Satir)**前移約束探詢做診斷;L0 紀錄落 PostgreSQL(自由文本信封加密)。
 
 > **賣點誠實:** 這是「多學派引導 + 安全閘 + 紀錄/報告」,**非**「code 強制獨立判讀」——隔離保證的是輸入素材(TAG 集)乾淨,不是 per-lens 推論。
 >
-> **v3.2 核心轉向:G0 由閘降為訊號**——輸入端永不停案(求助的人不該被掛電話),強制力集中輸出匣:③ 換安全約束集(3 風險向 × 4 年齡)、④ 須 `referral_ack`、紅旗 record 永久排除 promotion。
+> **v3.0 核心轉向:G0 由閘降為訊號**——輸入端永不停案(求助的人不該被掛電話),強制力集中輸出匣:③ 換安全約束集(3 風險向 × 4 年齡)、④ 須 `referral_ack`、紅旗 record 永久排除 promotion。
 
 ## Tool 介面(FSM:`① → ② → ③ ×n → ④ → ⑤ → report`,違序一律 `E_INVALID_STATE`)
 
@@ -17,7 +17,7 @@
 | ⑤ `archive` | `session_id / chunk_no / turns` | 原始逐字稿歸檔:工具標記防滲(整 chunk 拒收)、content_hash 冪等、G0 掃 parent 發言(record 不回改) |
 | `report` | `scope ∈ event\|quarter\|year / ref`(+`slots` = phase2) | phase1 九維聚合+骨架+guardian;phase2 五道驗證(字數/負面清單/數字白名單/原文防滲)→ 確定性組裝落庫;語意 tripwire 警告不拒收、下季回放 |
 
-- 終態 `finalized` / `expired`(TTL 棄案);`redflag_stopped` 自 v3.2 退役(legacy 列保留)。
+- 終態 `finalized` / `expired`(TTL 棄案);`redflag_stopped` 自本輪改版退役(legacy 列保留)。
 - G0 訊號單調:`redflag_active`/`severity`/`redflag_vector`(首見)只升不降不覆寫;①②③④⑤ 全入口稽核落 `events`。
 - 多照顧者(爸/媽):由 OAuth sub 經 `CAREGIVER_MAP` 映射,**不收輸入參數**;報告僅自照計數,比較句進語意警示。
 
@@ -37,7 +37,7 @@ uv run alembic upgrade head    # 0001→0008(或交由啟動時 ensure_schema)
 uv run parenting-response-mcp  # streamable-HTTP,預設 127.0.0.1:8000(local 模式)
 ```
 
-## 部署(Cloud Run + Neon + AuthKit;見 `docs/deploy-runbook-v3.2.md`)
+## 部署(Cloud Run + Neon + AuthKit;見 `docs/deploy-runbook.md`)
 
 **env 總表**:
 
@@ -62,12 +62,12 @@ Claude custom connector:URL 填 `https://<host>/mcp`,AuthKit 登入(DCR)。
 
 | 要查 | 看 |
 |---|---|
-| 總規格(LOCKED):FSM、tool 契約、安全邊界、驗收 | `parenting-response-mcp-spec-v3.2.md`(待入庫;v3.0 已 superseded) |
+| 總規格(LOCKED):FSM、tool 契約、安全邊界、驗收 | `parenting-response-mcp-spec-v3.0.md`(2026-06 G0 訊號化 A–K 已實作;條目由規格持有者 amend 寫回) |
 | 學派 TAG(6 回應+2 探詢+覆盤 6+safety 7;runtime 即讀) | `references/cores/tags.md` |
 | 報告骨架/槽位/guardian/驗證參數 | `references/report-core.md` |
 | L0 欄位語意、受控詞表、schema_version 分流、events 契約 | `references/record-schema.md` |
 | 紅旗/禁用詞詞源(F1–F8 / P01–P50) | `references/tw-parenting-antipatterns.md` |
-| 部署/備份/還原/金鑰輪替 | `docs/deploy-runbook-v3.2.md` |
+| 部署/備份/還原/金鑰輪替 | `docs/deploy-runbook.md` |
 | 歷史(v2.2 fat server) | 標 `superseded` 各檔 |
 
 ## 專案結構

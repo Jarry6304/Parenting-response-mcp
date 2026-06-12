@@ -11,7 +11,7 @@ from parenting_response.db import MemoryDatabase
 
 
 async def test_g0_shortcircuit_signals_not_stops(client: Client, db: MemoryDatabase) -> None:
-    """v3.2 A 件:① G0 短路 → 訊號不停案——照常建案,旗標+severity=高,
+    """v3.0 A 件:① G0 短路 → 訊號不停案——照常建案,旗標+severity=高,
     回傳含 referral 與 safety_mode 標記,FSM 照常推進(② 可走)。"""
     r = data_of(await client.call_tool("constraints", constraints_args(
         facts="他說他不想活了", emotion="害怕")))
@@ -41,7 +41,7 @@ async def test_g0_warning_raises_severity_at_1(client: Client, db: MemoryDatabas
 async def test_g0_recheck_flags_and_switches_to_safety(
     client: Client, db: MemoryDatabase
 ) -> None:
-    """v3.2 A 件:③ 複檢命中 → 訊號(旗標+severity),照常記輪;該輪起回傳換
+    """v3.0 A 件:③ 複檢命中 → 訊號(旗標+severity),照常記輪;該輪起回傳換
     安全約束集(無一般管教 TAG),不自動收案、不產 record。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
@@ -79,7 +79,7 @@ async def test_reaction_warning_raises_severity(client: Client, db: MemoryDataba
 
 async def test_high_tension_round_requires_note(client: Client, db: MemoryDatabase) -> None:
     """#4:高張力輪缺 reaction_note → ask-gate(不 insert round);補 note 含短路詞
-    → 旗標訊號 + 安全約束集(v3.2:不停案)。"""
+    → 旗標訊號 + 安全約束集(v3.0:不停案)。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
     r = data_of(await client.call_tool("core_tags", {
@@ -173,7 +173,7 @@ async def test_pattern_check_rejects_then_accepts(client: Client, db: MemoryData
 
 
 async def test_finalize_selfnote_shortcircuit_referral(client: Client, db: MemoryDatabase) -> None:
-    """#2+v3.2:④ parent_self_note 含短路詞 → 訊號已落;無 referral_ack 先擋
+    """#2+v3.0:④ parent_self_note 含短路詞 → 訊號已落;無 referral_ack 先擋
     (E_MISSING_AXIS,轉介必達的 code 強制),補 ack 後案照收且 record.redflag=true。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
@@ -196,7 +196,7 @@ async def test_finalize_selfnote_shortcircuit_referral(client: Client, db: Memor
 
 
 async def test_short_finalize_g0_not_skipped(client: Client, db: MemoryDatabase) -> None:
-    """#2+v3.2:short 只略過 pattern_check,不略過 G0——命中同樣要 referral_ack。"""
+    """#2+v3.0:short 只略過 pattern_check,不略過 G0——命中同樣要 referral_ack。"""
     sid = await open_session(client, facts="他今天主動把碗收到水槽", emotion="開心")
     await client.call_tool("prerequisites", prereq_args(
         sid, problem_category="正向紀錄", emotion_intensity="低", script_decision="skip"))
@@ -226,7 +226,7 @@ async def test_finalize_followup_warning(client: Client, db: MemoryDatabase) -> 
 
 
 async def test_finalize_clean_shape_unchanged(client: Client) -> None:
-    """#2:全文本乾淨 → 回傳形狀固定 {record_id, next=archive}(v3.2 收尾鏈)。"""
+    """#2:全文本乾淨 → 回傳形狀固定 {record_id, next=archive}(v3.0 收尾鏈)。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
     r = data_of(await client.call_tool("finalize", {
@@ -235,7 +235,7 @@ async def test_finalize_clean_shape_unchanged(client: Client) -> None:
 
 
 async def test_pattern_reject_keeps_g0_signal(client: Client, db: MemoryDatabase) -> None:
-    """#2+v3.2:G0 命中 + draft 踩 pattern——referral_ack 閘先行(安全優先),
+    """#2+v3.0:G0 命中 + draft 踩 pattern——referral_ack 閘先行(安全優先),
     補 ack 後 pattern 拒收照常,G0 訊號全程不丟。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})

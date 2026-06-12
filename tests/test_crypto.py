@@ -1,4 +1,4 @@
-"""v3.2 J 件:信封加密——roundtrip / 直通 / 輪替 / db 透明層(庫存密文、API 回明文)/
+"""v3.0 J 件:信封加密——roundtrip / 直通 / 輪替 / db 透明層(庫存密文、API 回明文)/
 G0 先於加密。全套件其餘測試維持明文直通(僅本檔開金鑰)。"""
 
 from __future__ import annotations

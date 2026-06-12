@@ -1,13 +1,13 @@
-"""編排器(v3.2):FSM 守衛 → G0 訊號 → 回傳靜態 TAG / safety 卡 → 後檢 → 落庫。**全程零 LLM。**
+"""編排器(v3.0):FSM 守衛 → G0 訊號 → 回傳靜態 TAG / safety 卡 → 後檢 → 落庫。**全程零 LLM。**
 
 不變量(可斷言:無 LLM client 物件):
   FSM stage:constrained → {ready|short_pending} → finalized(終態另有 TTL 之 expired)
   違 stage 呼叫一律 E_INVALID_STATE,零成本
   records UNIQUE(session_id);status 條件式轉移 WHERE status='open'
 
-v3.2 A 件:G0 由閘降為訊號——輸入命中**不擋、不停案、FSM 照常推進**;
+v3.0 A 件:G0 由閘降為訊號——輸入命中**不擋、不停案、FSM 照常推進**;
 強制力集中輸出匣:③ 換 safety 約束集、④ 須 referral_ack、record.redflag 排除 promotion。
-redflag_stopped 自 v3.2 移除(legacy 列保留,查詢視同 closed)。
+redflag_stopped 自本輪改版移除(legacy 列保留,查詢視同 closed)。
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ REACTION_PRIMARY: dict[str, tuple[str, ...]] = {
 
 # D3 投影:高張力反應後的第一個「鬆動配合」不算收斂(討好式順從防線)
 _HIGH_TENSION_REACTIONS = {"情緒爆發", "退縮害怕"}
-ROUND_SOFT_CAP = 5  # v3.2 D 件:乒乓軟上限(第 5 輪起建議暫停,不強制)
+ROUND_SOFT_CAP = 5  # v3.0 D 件:乒乓軟上限(第 5 輪起建議暫停,不強制)
 
 # record_id 的「當日」= 臺北日,與部署主機時區無關(record-schema);
 # 台灣自 1980 無夏令時,固定 +8 免 tzdata 依賴
@@ -79,7 +79,7 @@ class Orchestrator:
                  caregiver_map: dict[str, str] | None = None) -> None:
         self.db = db
         self.session_ttl_days = session_ttl_days  # ≤0 = 停用棄案清掃
-        # v3.2 K 件:sub → caregiver(爸|媽)。身分來自已驗 token,不收輸入參數
+        # v3.0 K 件:sub → caregiver(爸|媽)。身分來自已驗 token,不收輸入參數
         # (誰登入就是誰,host/家長皆不可代填)。local 模式(無 sub)= 預設「爸」。
         self.caregiver_map = caregiver_map or {}
         # 注意:無 self.llm —— v3 零推論,刻意不收 LLM client
@@ -99,7 +99,7 @@ class Orchestrator:
 
     async def _log_event(self, session_id: str | None, kind: str,
                          payload: dict[str, Any]) -> None:
-        """events 統一落點(v3.2 I 件):authkit 模式自動附已驗 sub(誰觸發的)。"""
+        """events 統一落點(v3.0 I 件):authkit 模式自動附已驗 sub(誰觸發的)。"""
         sub = current_sub()
         if sub is not None:
             payload = {**payload, "sub": sub}
@@ -118,7 +118,7 @@ class Orchestrator:
             cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=self.session_ttl_days)
             await self.db.expire_stale_sessions(cutoff)
 
-        # v3.2 C 件入口分流:mode 缺 → ask-gate(不建案、不報錯),附該 child 的
+        # v3.0 C 件入口分流:mode 缺 → ask-gate(不建案、不報錯),附該 child 的
         # open 案清單供「續上次」;mode=resume → 接手舊案,不建新案。
         if mode is None:
             return await self._entry_gate(child_id)
@@ -127,8 +127,8 @@ class Orchestrator:
         if not facts or not emotion or mode not in MODES:
             raise PRError(E_MISSING_AXIS, "① 必要:facts / emotion / mode(live|rehearsal|retro)")
 
-        # linked_plan 守衛(承 v2.2 A2 + v3.2 A 件):須指向存在且 status=planned 的
-        # record;紅旗案不可引用——redflag=true 為 v3.2 主錨,status/outcome 為 legacy
+        # linked_plan 守衛(承 v2.2 A2 + v3.0 A 件):須指向存在且 status=planned 的
+        # record;紅旗案不可引用——redflag=true 為 v3.0 主錨,status/outcome 為 legacy
         # 縱深防禦(雙保險,兼擋 v1 遺留之 planned+escalated 列)。
         if linked_plan_id is not None:
             rec = await self.db.get_record(linked_plan_id)
@@ -142,7 +142,7 @@ class Orchestrator:
         labeled = (("facts", facts), ("emotion", emotion))
         caregiver = await self._resolve_caregiver()  # K 件:身分由 token 定,先驗再建案
 
-        # G0(v3.2 A 件:訊號,不停案)——短路命中照常建案,旗標+severity=高,
+        # G0(v3.0 A 件:訊號,不停案)——短路命中照常建案,旗標+severity=高,
         # FSM 照常推進;強制力由輸出匣承接(③ safety 卡、④ referral_ack)。
         rf = check_shortcircuit(labeled)
         warning_hits = check_warning(labeled)
@@ -169,7 +169,7 @@ class Orchestrator:
             result["safety_mode"] = True
         return result
 
-    # ── ① 入口分流(v3.2 C 件):ask-gate + resume ────────────────────
+    # ── ① 入口分流(v3.0 C 件):ask-gate + resume ────────────────────
 
     async def _entry_gate(self, child_id: str) -> dict[str, Any]:
         """mode 缺 → 入口 ask-gate:列三個入口與該 child 的 open 案(不建案)。"""
@@ -238,7 +238,7 @@ class Orchestrator:
             raise PRError(E_MISSING_AXIS, "② 必填:age_band(2-3|4-6|7-11|12+)/ emotion_intensity(低|中|高)")
         if problem_category is not None and problem_category not in PROBLEM_CATEGORIES:
             raise PRError(E_MISSING_AXIS, f"problem_category 不在受控詞表:{problem_category}")
-        # v3.2 B 件:retro 必交「當時實際怎麼處理」——覆盤的素材,缺之 ③ 無從回看
+        # v3.0 B 件:retro 必交「當時實際怎麼處理」——覆盤的素材,缺之 ③ 無從回看
         if str(s["mode"]) == "retro" and not parent_action:
             raise PRError(E_MISSING_AXIS, "② retro 模式必填 parent_action(當時你實際怎麼處理)")
 
@@ -297,7 +297,7 @@ class Orchestrator:
         rounds = await self.db.get_rounds(session_id)
         round_no = len(rounds)
 
-        # v3.2 B 件:retro 覆盤限一輪(③×1)——事件已結束,無乒乓可言
+        # v3.0 B 件:retro 覆盤限一輪(③×1)——事件已結束,無乒乓可言
         is_retro = str(s["mode"]) == "retro"
         if is_retro and round_no > 0:
             raise PRError(E_INVALID_STATE, "retro 覆盤限一輪(③×1);後續請直接 finalize")
@@ -313,7 +313,7 @@ class Orchestrator:
         else:  # 乒乓輪需 reaction
             if child_reaction not in CHILD_REACTIONS:
                 raise PRError(E_INVALID_STATE, f"child_reaction 須 ∈ 六類:{child_reaction}")
-            # v3.2 D 件收束 ask-gate:上輪已收斂(讀上輪 synthesis_trace,不重算)
+            # v3.0 D 件收束 ask-gate:上輪已收斂(讀上輪 synthesis_trace,不重算)
             # 且家長未明示繼續 → 停一拍問人,不記輪。僅 live——rehearsal 無真實
             # 乒乓、retro ×1 無上輪。
             prev_trace: dict[str, Any] = rounds[-1].get("synthesis_trace") or {}
@@ -333,7 +333,7 @@ class Orchestrator:
             warning_hits = check_warning(labeled)
             warning_hit = bool(warning_hits)
             if rf is not None:
-                # v3.2 A 件:命中 → 訊號(旗標+severity 單調升),照常推進本輪,不收案
+                # v3.0 A 件:命中 → 訊號(旗標+severity 單調升),照常推進本輪,不收案
                 await self.db.update_session(session_id, self._redflag_updates(s, rf))
                 s = {**s, "redflag_active": True,
                      "redflag_vector": s.get("redflag_vector") or rf.vector}
@@ -369,7 +369,7 @@ class Orchestrator:
         )
         result: dict[str, Any]
         if safety_mode:
-            # v3.2 安全約束集換軌:不出一般管教 TAG——家長當下最需要的是
+            # v3.0 安全約束集換軌:不出一般管教 TAG——家長當下最需要的是
             # 「現在該說什麼」(陪伴/傾聽/降溫+轉介),內容換軌、不斷供。
             vector = str(s.get("redflag_vector") or "child")  # 理論不可達之防禦:取最保守向
             result = {"safety_mode": True,
@@ -427,7 +427,7 @@ class Orchestrator:
         if rf is not None or warning_hits:
             await self._log_g0(session_id, "④", rf=rf, warnings=warning_hits)
 
-        # v3.2 A 件落庫前置:旗標在案(含本次 ④ 才命中者)→ 轉介必須已向家長送達,
+        # v3.0 A 件落庫前置:旗標在案(含本次 ④ 才命中者)→ 轉介必須已向家長送達,
         # host 以 referral_ack=true 確認;缺則 E_MISSING_AXIS(訊號已落,不丟)。
         redflag_now = bool(s.get("redflag_active")) or rf is not None
         if redflag_now and referral_ack is not True:
@@ -472,7 +472,7 @@ class Orchestrator:
         if not ok:
             raise PRError(E_INVALID_STATE, "session 已非 open(併發 finalize 恰一成功)")
         result: dict[str, Any] = {"record_id": record["record_id"],
-                                  "next": "archive"}  # v3.2 E 件:收尾鏈 ④→⑤→report(event)
+                                  "next": "archive"}  # v3.0 E 件:收尾鏈 ④→⑤→report(event)
         if rf is not None:
             result["redflag"] = rf.model_dump()
             result["referral"] = rf.referral
@@ -480,7 +480,7 @@ class Orchestrator:
             result["warnings"] = warnings
         return result
 
-    # ── ⑤ archive(v3.2 E 件:原始逐字稿歸檔) ───────────────────────
+    # ── ⑤ archive(v3.0 E 件:原始逐字稿歸檔) ───────────────────────
 
     async def archive(
         self, *, session_id: str, chunk_no: int, turns: list[dict[str, Any]],
@@ -542,7 +542,7 @@ class Orchestrator:
             result["referral"] = rf.referral
         return result
 
-    # ── report(v3.2 F+H 件:聚合 phase1 / 驗證組裝 phase2) ─────────
+    # ── report(v3.0 F+H 件:聚合 phase1 / 驗證組裝 phase2) ─────────
 
     async def report(
         self, *, scope: str, ref: str, slots: dict[str, str] | None = None,
@@ -757,7 +757,7 @@ class Orchestrator:
         if rf is not None:
             await self._log_event(session_id, "g0_shortcircuit", {
                 **base, "field": rf.field, "phrase": rf.phrase, "excerpt": rf.excerpt,
-                "vector": rf.vector,         # 風險向(v3.2 G 件:組卡緣由可重建)
+                "vector": rf.vector,         # 風險向(v3.0 G 件:組卡緣由可重建)
                 "referral_delivered": True,  # 命中路徑回傳必含 referral(by construction)
             })
         if warnings:
@@ -766,7 +766,7 @@ class Orchestrator:
             })
 
     def _redflag_updates(self, s: dict[str, Any], rf: Redflag) -> dict[str, Any]:
-        """短路命中之 session 訊號更新(v3.2 A 件):旗標升、severity 升、
+        """短路命中之 session 訊號更新(v3.0 A 件):旗標升、severity 升、
         風險向首見寫入後不覆寫——三者皆單調,後續任何操作不得降。"""
         updates: dict[str, Any] = {
             "redflag_active": True,
@@ -809,7 +809,7 @@ class Orchestrator:
         band = s.get("age_band")
         linked = s.get("linked_plan_id")
         if outcome == "escalated_to_redflag":
-            status = "stopped"  # legacy 受控詞(host 可自交);v3.2 promotion 排除主錨 = redflag
+            status = "stopped"  # legacy 受控詞(host 可自交);v3.0 promotion 排除主錨 = redflag
         elif str(s["mode"]) == "rehearsal":
             status = "planned"
         elif linked:
@@ -836,8 +836,8 @@ class Orchestrator:
             "followup": followup,
             "tools_used": None,        # v2 遺產欄;v3 改記 claimed_sources
             "posture": None,           # v3 無判讀來源,恆 NULL
-            "redflag": redflag,        # v3.2 A 件:promotion 排除錨(不可變)
-            "parent_action": s.get("parent_action"),  # v3.2 B 件:retro 當時實際處理
+            "redflag": redflag,        # v3.0 A 件:promotion 排除錨(不可變)
+            "parent_action": s.get("parent_action"),  # v3.0 B 件:retro 當時實際處理
         }
 
     # ── 靜態素材(tags.md / wordlists 的 code 出口) ────────────────

@@ -35,7 +35,7 @@ EXPECTED_STAGES: dict[str, tuple[str, str]] = {
 
 
 def test_tags_loader_completeness() -> None:
-    """tags.md 載入:8 校齊、欄位齊、值非空;v3.2 加 safety 7 塊 + 覆盤 6 塊(fail-fast)。"""
+    """tags.md 載入:8 校齊、欄位齊、值非空;v3.0 加 safety 7 塊 + 覆盤 6 塊(fail-fast)。"""
     tags = load_tags()
     review_blocks = {f"{s}.覆盤" for s in RESPONSE_CORES}
     assert set(tags) == (set(RESPONSE_CORES) | set(INQUIRY_CORES)
