@@ -13,11 +13,12 @@ redflag_stopped 自 v3.2 移除(legacy 列保留,查詢視同 closed)。
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import uuid
 from typing import Any
 
 from .cores import inquiry_probes, red_line_union, response_tags, review_tags, safety_cards
-from .db import Database, UniqueViolation
+from .db import Database, UniqueViolation, dump_json
 from .redflag import check_shortcircuit, check_warning
 from .schema import (
     AGE_BANDS,
@@ -45,6 +46,7 @@ from .wordlists import (
     OUTPUT_PATTERN_F5,
     REFERRAL_TEXT,
     find_output_violations,
+    find_tool_markup,
 )
 
 # 反應二級強調(單一來源 = spec v3.0「反應二級強調」表;此處為 code 投影,僅含 6 回應核心)
@@ -436,12 +438,75 @@ class Orchestrator:
         )
         if not ok:
             raise PRError(E_INVALID_STATE, "session 已非 open(併發 finalize 恰一成功)")
-        result: dict[str, Any] = {"record_id": record["record_id"]}
+        result: dict[str, Any] = {"record_id": record["record_id"],
+                                  "next": "archive"}  # v3.2 E 件:收尾鏈 ④→⑤→report(event)
         if rf is not None:
             result["redflag"] = rf.model_dump()
             result["referral"] = rf.referral
         elif warnings:
             result["warnings"] = warnings
+        return result
+
+    # ── ⑤ archive(v3.2 E 件:原始逐字稿歸檔) ───────────────────────
+
+    async def archive(
+        self, *, session_id: str, chunk_no: int, turns: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """逐字稿歸檔:任何 status 的既有案皆可收(終態案補錄常態)。
+
+        防滲:工具協議標記命中 → 整 chunk 拒收(逐字稿只該有對話原文);
+        冪等:UNIQUE(session_id, content_hash);G0 掃 parent turns(assistant
+        是系統產出,無自陳意義)→ 訊號補升,record 不回改。
+        """
+        s = await self.db.get_session(session_id)
+        if s is None:
+            raise PRError(E_INVALID_STATE, f"session {session_id} 不存在")
+        if not turns:
+            raise PRError(E_MISSING_AXIS, "⑤ turns 不可為空")
+        for i, t in enumerate(turns):
+            role = t.get("role")
+            content = t.get("content")
+            if role not in ("parent", "assistant") or not isinstance(content, str) or not content:
+                raise PRError(E_MISSING_AXIS,
+                              f"⑤ turns[{i}] 須為 {{role: parent|assistant, content: 非空文字}}")
+
+        markup_hits: list[dict[str, Any]] = []
+        for i, t in enumerate(turns):
+            found = find_tool_markup(str(t["content"]))
+            if found:
+                markup_hits.append({"turn": i, "patterns": found})
+        if markup_hits:  # 整 chunk 拒收:逐字稿純度優先,部分落庫會造成靜默缺漏
+            await self.db.log_event(session_id, "archive_rejected", {
+                "source": "⑤", "chunk_no": chunk_no, "hits": markup_hits,
+            })
+            return {"rejected": True, "violations": markup_hits,
+                    "hint": "逐字稿含工具協議標記,請去除後整 chunk 重送(不落庫)"}
+
+        canonical = dump_json([{"role": t["role"], "content": t["content"]} for t in turns])
+        content_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        tid = await self.db.insert_transcript(
+            session_id, chunk_no=chunk_no, content_hash=content_hash, turns_json=canonical)
+        if tid is None:
+            return {"duplicate": True, "next": "report(event)"}  # 重送冪等,不重複落
+
+        # G0 全文複檢(僅 parent turns):補升旗標/severity + 稽核;已落 record 不回改
+        labeled = tuple((f"turns[{i}]", str(t["content"]))
+                        for i, t in enumerate(turns) if t["role"] == "parent")
+        rf = check_shortcircuit(labeled)
+        warning_hits = check_warning(labeled)
+        if rf is not None:
+            await self.db.update_session(session_id, self._redflag_updates(s, rf))
+        elif warning_hits:
+            await self.db.update_session(
+                session_id, {"severity": self._raise(s.get("severity"), "高")})
+        if rf is not None or warning_hits:
+            await self._log_g0(session_id, "⑤", rf=rf, warnings=warning_hits)
+
+        result: dict[str, Any] = {"archived": True, "chunk_no": chunk_no,
+                                  "next": "report(event)"}
+        if rf is not None:
+            result["redflag"] = rf.model_dump()
+            result["referral"] = rf.referral
         return result
 
     # ── 共用守衛 / 終態 ───────────────────────────────────────────

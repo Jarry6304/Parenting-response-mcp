@@ -136,7 +136,25 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         except PRError as exc:
             raise ToolError(str(exc)) from exc
 
-    _registered = (constraints, prerequisites, core_tags, finalize)  # @mcp.tool 註冊
+    @mcp.tool
+    async def archive(
+        session_id: str,
+        chunk_no: int,
+        turns: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """⑤ 原始逐字稿歸檔(v3.2;④ 之後的收尾鏈,終態案可補錄)。
+
+        turns = [{role: parent|assistant, content: 對話原文}, …](依序)。
+        含工具協議標記 → 整 chunk 拒收回明細;同內容重送冪等(duplicate);
+        parent 發言過 G0 複檢——命中補升訊號(record 不回改)。
+        成功 → next: report(event)。
+        """
+        try:
+            return await orch.archive(session_id=session_id, chunk_no=chunk_no, turns=turns)
+        except PRError as exc:
+            raise ToolError(str(exc)) from exc
+
+    _registered = (constraints, prerequisites, core_tags, finalize, archive)  # @mcp.tool 註冊
     del _registered
     return mcp
 

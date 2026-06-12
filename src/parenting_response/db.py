@@ -56,6 +56,23 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_session_idx ON events (session_id);
 """
 
+# 原始逐字稿(v3.2 E 件;append-only side-table,不動 records schema_version):
+# turns 存 JSON 文字(TEXT 而非 JSONB——0007 就地加密就緒);
+# UNIQUE(session_id, content_hash) 承載冪等(同 chunk 重送不重複落)。
+# 0005 遷移與 ensure_schema 共用,單一來源。
+DDL_TRANSCRIPTS = """
+CREATE TABLE IF NOT EXISTS raw_transcripts (
+    transcript_id BIGSERIAL PRIMARY KEY,
+    session_id    TEXT NOT NULL REFERENCES sessions(session_id),
+    chunk_no      INT NOT NULL,
+    content_hash  TEXT NOT NULL,
+    turns         TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (session_id, content_hash)
+);
+CREATE INDEX IF NOT EXISTS raw_transcripts_session_idx ON raw_transcripts (session_id);
+"""
+
 DDL = """
 CREATE TABLE IF NOT EXISTS sessions (
     session_id        TEXT PRIMARY KEY,
@@ -118,7 +135,7 @@ CREATE TABLE IF NOT EXISTS records (
     redflag          BOOLEAN NOT NULL DEFAULT false,
     parent_action    TEXT
 );
-""" + DDL_EVENTS
+""" + DDL_EVENTS + DDL_TRANSCRIPTS
 
 # v2.2 → v3.0 既有資料庫升級(冪等;migration 0002 與 ensure_schema 共用,單一來源)。
 # 0001 動態 import 本檔 DDL,全新庫在 0001 即得 v3 形狀,本塊必須可 no-op。
@@ -168,6 +185,10 @@ class Database(Protocol):
     async def expire_stale_sessions(self, cutoff: _dt.datetime) -> int: ...
     async def log_event(self, session_id: str, kind: str, payload: dict[str, Any]) -> None: ...
     async def get_events(self, session_id: str) -> list[dict[str, Any]]: ...
+    async def insert_transcript(
+        self, session_id: str, *, chunk_no: int, content_hash: str, turns_json: str,
+    ) -> int | None: ...
+    async def get_transcripts(self, session_id: str) -> list[dict[str, Any]]: ...
     async def finalize_tx(
         self, session_id: str, *, terminal_status: str,
         session_updates: dict[str, Any], record_row: dict[str, Any],
@@ -184,6 +205,7 @@ class MemoryDatabase:
         self._records: dict[str, dict[str, Any]] = {}
         self._records_by_session: dict[str, str] = {}
         self._events: list[dict[str, Any]] = []
+        self._transcripts: dict[str, list[dict[str, Any]]] = {}
 
     async def create_session(self, row: dict[str, Any]) -> None:
         async with self._lock:
@@ -274,6 +296,24 @@ class MemoryDatabase:
 
     async def get_events(self, session_id: str) -> list[dict[str, Any]]:
         return [dict(e) for e in self._events if e["session_id"] == session_id]
+
+    async def insert_transcript(
+        self, session_id: str, *, chunk_no: int, content_hash: str, turns_json: str,
+    ) -> int | None:
+        async with self._lock:
+            rows = self._transcripts.setdefault(session_id, [])
+            if any(r["content_hash"] == content_hash for r in rows):
+                return None  # UNIQUE(session_id, content_hash):重送冪等
+            tid = sum(len(v) for v in self._transcripts.values())
+            rows.append({
+                "transcript_id": tid, "session_id": session_id, "chunk_no": chunk_no,
+                "content_hash": content_hash, "turns": turns_json,
+                "created_at": _dt.datetime.now(_dt.timezone.utc),
+            })
+            return tid
+
+    async def get_transcripts(self, session_id: str) -> list[dict[str, Any]]:
+        return [dict(r) for r in self._transcripts.get(session_id, [])]
 
     async def finalize_tx(
         self, session_id: str, *, terminal_status: str,
@@ -437,6 +477,30 @@ class PgDatabase:
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 "SELECT * FROM events WHERE session_id = %s ORDER BY event_id", (session_id,)
+            )
+            return await self._fetchall_dicts(cur)
+
+    async def insert_transcript(
+        self, session_id: str, *, chunk_no: int, content_hash: str, turns_json: str,
+    ) -> int | None:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                INSERT INTO raw_transcripts (session_id, chunk_no, content_hash, turns)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (session_id, content_hash) DO NOTHING
+                RETURNING transcript_id
+                """,
+                (session_id, chunk_no, content_hash, turns_json),
+            )
+            row = await cur.fetchone()
+            return int(row[0]) if row is not None else None  # None = 重送冪等
+
+    async def get_transcripts(self, session_id: str) -> list[dict[str, Any]]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT * FROM raw_transcripts WHERE session_id = %s ORDER BY transcript_id",
+                (session_id,),
             )
             return await self._fetchall_dicts(cur)
 

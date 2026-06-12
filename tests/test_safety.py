@@ -206,9 +206,9 @@ async def test_escalated_outcome_maps_legacy_stopped(client: Client, db: MemoryD
 
 
 async def test_finalize_clean_session_no_ack_needed(client: Client) -> None:
-    """A:無旗標案 ④ 不需 referral_ack(回溯相容,形狀不變)。"""
+    """A:無旗標案 ④ 不需 referral_ack(形狀 = {record_id, next})。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
     r = data_of(await client.call_tool("finalize", {
         "session_id": sid, "outcome": "resolved", "draft": "我們一起想辦法。"}))
-    assert set(r) == {"record_id"}
+    assert set(r) == {"record_id", "next"}

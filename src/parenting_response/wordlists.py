@@ -54,6 +54,22 @@ G0_WARNING_PHRASES: tuple[str, ...] = (
     "衣架", "棍子拿來", "愛的小手", "手伸出來", "揍你", "打到你乖", "欠揍", "罰跪", "罰站到",
 )
 
+# ── ⑤ archive 防滲(v3.2 E 件):工具協議標記不得混入逐字稿 ──────
+# 錨定「協議標記」而非語意:逐字稿是家長與 host 的對話原文,任何
+# function-call / tool-use 結構出現即代表 host 把工具軌道誤倒進來(或偽造),
+# 整 chunk 拒收。樣式涵蓋 XML 形(<function…>)與 JSON 形("tool_calls":)。
+_TOOL_MARKUP_RE = re.compile(
+    r"</?(?:antml:)?(?:function|invoke|parameter|tool_use|tool_result|function_calls|function_results)\b[^>]*>"
+    r"|\"(?:tool_calls|function_call|tool_use_id|tool_result)\"\s*:"
+    r"|```json\s*\{",
+)
+
+
+def find_tool_markup(text: str) -> list[str]:
+    """逐字稿工具標記掃描:回命中樣式列(空 = 乾淨)。"""
+    return [m.group(0) for m in _TOOL_MARKUP_RE.finditer(text)]
+
+
 REFERRAL_TEXT = (
     "這個情況超出本系統的安全範圍,請尋求專業協助:"
     "兒童青少年心智科或心理諮商;台灣 113 保護專線;若有立即危險請撥 110/119。"
