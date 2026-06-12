@@ -3,13 +3,15 @@ spec: parenting-response / mcp
 version: 3.0
 status: LOCKED（架構與三項待議全數定案,不再討論）
 date: 2026-06-11
-amended: 2026-06-11（defect-fixes v1.0,#1–#5:stopped record / ④ G0 / ④ 須 ≥1 輪 ③ / 高張力 note 閘 / converged 錨點;defect-fixes v1.1,#6–#11:棄案 TTL=expired / events 稽核證據鏈 / 預設綁 127.0.0.1 / record_id 臺北日 / F2·F5 人身錨定）
+amended: 2026-06-11（defect-fixes v1.0,#1–#5:stopped record / ④ G0 / ④ 須 ≥1 輪 ③ / 高張力 note 閘 / converged 錨點;defect-fixes v1.1,#6–#11:棄案 TTL=expired / events 稽核證據鏈 / 預設綁 127.0.0.1 / record_id 臺北日 / F2·F5 人身錨定);2026-06-12（G0 訊號化與能力擴充 A–K:G0 閘→訊號 / retro 覆盤 / 入口分流+resume / 收束 ask-gate / ⑤ archive / report 體系 / safety 分齡 / 語意紅線三層 / AuthKit OAuth / 信封加密 / 多照顧者——見文末 Amendment 節,衝突處以該節為準）
 supersedes: v2.2（fat server + 自有 API key + code 強制隔離）→ v3.0（thin server + 零 API key + host 耦合 + 盡量隔離）
 ---
 
 # parenting-response MCP 規格 (v3.0)
 
-> Thin MCP server:**零 LLM 呼叫、零 API key**。對 host 只暴露 4 個工具,server 端 code 強制呼叫順序與安全閘。學派分兩群:**6 回應核心**以靜態 TAG 由 host 一次耦合生成;**2 探詢核心(Maslow/Satir)**前移約束探詢,做診斷不做回應。隔離降為「輸入素材隔離」而非「per-lens 獨立判讀」,換取零推論成本。
+> Thin MCP server:**零 LLM 呼叫、零 API key**。對 host 暴露 6 個工具(2026-06 起;初版 4 個),server 端 code 強制呼叫順序與安全閘。學派分兩群:**6 回應核心**以靜態 TAG 由 host 一次耦合生成;**2 探詢核心(Maslow/Satir)**前移約束探詢,做診斷不做回應。隔離降為「輸入素材隔離」而非「per-lens 獨立判讀」,換取零推論成本。
+>
+> **⚠ 2026-06-12 Amendment 告示:** 正文(2026-06-11 版)所有「G0 短路 → `redflag_stopped` 鎖死」之描述已由文末 **Amendment A 件(G0 閘→訊號)取代**——輸入端永不停案,`redflag_stopped` 不再產生。正文與 Amendment 節衝突處,一律以 Amendment 為準;正文原文保留供歷史對照。
 
 ## v2.2 → v3.0 轉向
 
@@ -201,3 +203,179 @@ records 瘦身（vs v2.2）:
 | host 繞過 ④ / 不真問家長 | 價值（`record_id` / `converged`）藏 ④ 後（誘因制,不偵測） |
 
 > **賣點誠實:** v3.0 是「多學派引導 + 安全閘」,**非**「code 強制獨立判讀」。對外與 demo 一律據此描述。
+
+---
+
+# 2026-06-12 Amendment:G0 訊號化與能力擴充(A–K)
+
+> **本節為準**:與正文衝突處以本節取代正文。版號維持 3.0(amend 制);
+> 實作與 134 條驗收測試先行落地,本節為其規格寫回。
+> 工具面由 4 個擴為 **6 個**:`①②③④ + ⑤ archive + report`。
+
+## 總綱:G0 由「閘」降為「訊號」
+
+正在求助的家長不該被掛電話。`redflag_stopped` 把「說出危險訊號」變成「對話被切斷」,
+懲罰了坦白;v3.0 初版此設計廢止。新原則:
+
+- **輸入端永不停案**:①②③④⑤ 全入口 G0 複檢,短路命中只做三件事——
+  `sessions.redflag_active=true`、`severity=高`、`redflag_vector` 首見寫入(child|parent|third,
+  由命中詞組自然攜帶);三者**單調**(只升不降、首見不覆寫),FSM 照常推進。
+- **強制力集中輸出匣**:
+  1. ③ `redflag_active` → 回**安全約束集**(G 件)取代一般管教 TAG(內容換軌、不斷供);`converged` 恆 false(危機陪伴不適用收斂訊號)。
+  2. ④ 紅旗在案(含本次命中)→ 須 `referral_ack=true`(host 確認轉介已向家長送達),否則 `E_MISSING_AXIS`——訊號先落庫再擋,擋下不丟。
+  3. `record.redflag=true` 落錨(= redflag_active ∨ ④ 命中),**永久排除 promotion**:① `linked_plan_id` 引用 → `E_INVALID_LINK`(status=stopped / outcome 檢查降為 legacy 雙保險)。
+- 終態收斂為 `finalized` + `expired`;`redflag_stopped` 僅存於 amend 前歷史列(查詢視同 closed),**任何新路徑不得產生**。
+- 正文 FSM 圖與 Tool 表中「→ redflag_stopped」分支全部失效;①③ 命中改「照常建案/照常記輪 + 訊號 + `safety_mode=true` + referral 必達」。
+
+## A 件:G0 閘→訊號(行為規格)
+
+- ① 短路:照常建案(stage=constrained, status=open),回傳 = 正常約束集 + `{redflag, referral, safety_mode: true}`。
+- ③ 短路:照常記輪,該輪起回傳換 safety 卡(見 G 件);本輪回傳另附 `redflag`/`referral`。
+- ④ 短路:不拒收(沿 defect-fixes #2),另疊 referral_ack 閘;`referral_ack` 僅紅旗在案時要求(乾淨案不需,回溯相容)。
+- ⑤ 短路:訊號補升 + events(source=⑤);**已落 record 不回改**(events 留痕)。
+- outcome=`escalated_to_redflag` 保留為受控詞(host 可自報)→ record.status=stopped(legacy 映射)且 redflag=true。
+
+驗收:
+- [ ] 給定 G0 短路命中,當 ①,則 session=open、`redflag_active=true`、回傳含 referral 與 safety_mode,且 ② 照常可走
+- [ ] 給定 ③ 複檢命中,則 不收案、照常記輪、回傳換安全約束集(無 `response_tags`)
+- [ ] 給定 紅旗在案,當 ④ 未帶 `referral_ack=true`,則 `E_MISSING_AXIS` 且訊號已落;帶之則落庫且 `record.redflag=true`
+- [ ] 給定 `record.redflag=true`,當 ① 以 `linked_plan_id` 引用,則 `E_INVALID_LINK`
+- [ ] 全流程任意命中組合,`redflag_stopped` 不出現於任何新列
+
+## B 件:retro 事後覆盤 mode
+
+- `mode` 受控詞 +`retro`(事件已結束,家長回頭整理)。
+- ②:retro 必填 `parent_action`(當時實際怎麼處理)→ 進 G0(source=②;自陳失手即訊號)→ 存 sessions,④ 投影至 `record.parent_action`。
+- ③:**限一輪**(×1,無乒乓;第二呼 `E_INVALID_STATE`);回傳 = 一般 TAG(「下次怎麼回」)+ `review_tags` 六校覆盤鏡頭(`視角/操作/示範`,單一來源 = tags.md 覆盤 6 塊);`converged=NULL`。探詢核心(maslow/satir)職責是探孩子內心,**不作覆盤視角**。
+- record.status:retro 走 `done`(實際發生過的處理,非計畫)。
+
+驗收:
+- [ ] 給定 mode=retro 缺 `parent_action`,當 ②,則 `E_MISSING_AXIS`
+- [ ] 給定 retro ③,則 回 6 校 `review_tags` 且 `converged=null`;第二呼 `E_INVALID_STATE`
+- [ ] 給定 `parent_action` 含短路詞,則 訊號照落(source=②)且照常推進
+- [ ] 給定 retro ④,則 `record.parent_action` = ② 所交原文
+
+## C 件:入口分流 + resume
+
+- ① `mode` 缺 → 入口 ask-gate:`{requires: mode, options: [live, retro, resume], open_sessions}`(**不建案、不報錯**);`open_sessions` 按 child_id 隔離,每項含 session_id/stage/mode/facts 截斷 30 字/age_band/last_active。
+- `mode=resume` + `session_id` → 接手 open 案:回 stage/三軸/facts/emotion + `rounds_summary`(輪數 + 受控詞反應序列,**不回放 reaction_note**)+ next 指引;不建案、不動 stage;touch `updated_at` 續期。紅旗案附 `safety_mode=true`。
+- TTL 錨定改 `max(updated_at, 最後輪)`;逾期案由懶清掃先行轉 expired,resume 不可續。
+
+驗收:
+- [ ] 給定 mode 缺省,當 ①,則 回 ask-gate 三選項與 open 案清單,不建案
+- [ ] 給定 resume open 案,則 回輪摘要(無自由文本)且 stage 不變、TTL 續期
+- [ ] 給定 resume 不存在/已終態之案,則 `E_INVALID_STATE`
+
+## D 件:收束 ask-gate + round 軟上限
+
+- `converged` 於寫入時**定格於 `rounds.synthesis_trace.converged`**;收束判定讀上輪 trace,不重算。
+- live 且上輪 converged=true 且本呼未帶 `parent_decision="continue"` → 收束 ask-gate `{requires: parent_decision, options: [continue, finalize]}`(不記輪);要收尾直接呼 ④。`parent_decision` 僅受 `continue`,他值 `E_INVALID_STATE`。rehearsal/retro 不觸發。
+- 第 5 輪起(`round_no ≥ 5`)回傳附 `suggest_pause: true`(軟上限:建議不強制)。
+
+驗收:
+- [ ] 給定 上輪已收斂(live),當 ③ 未帶 parent_decision,則 ask-gate 且不記輪;帶 continue 則照常
+- [ ] 給定 rehearsal 同情境,則 不觸發收束 gate
+- [ ] 給定 第 5 輪起,則 回傳含 suggest_pause(TAG 照回,不擋)
+
+## E 件:⑤ archive 原始逐字稿
+
+- 新工具 `archive(session_id, chunk_no, turns)`;`turns = [{role: parent|assistant, content}]`。任何 status 既有案可收(終態補錄常態);④ 回傳 +`next: archive`,⑤ 回傳 `next: report(event)`(收尾鏈)。
+- 防滲:工具協議標記(XML 形 `<function…>` 等 / JSON 形 `"tool_calls":` 等)任一命中 → **整 chunk 拒收**回明細 + events `archive_rejected`。
+- 冪等:`content_hash = sha256(canonical JSON)`(明文計算),UNIQUE(session_id, content_hash);重送回 `duplicate`。
+- G0 複檢**僅掃 parent turns**(assistant 為系統產出,無自陳意義):命中 → 訊號補升 + events(source=⑤),**已落 record 不回改**。
+
+驗收:
+- [ ] 給定 乾淨 turns,當 ⑤,則 落庫且回 next=report(event);同內容重送回 duplicate 不重複落
+- [ ] 給定 任一 turn 含工具標記,則 整 chunk 拒收 + 稽核,不落庫
+- [ ] 給定 parent turn 含短路詞,則 旗標+severity 升、events source=⑤、record.redflag 不變
+- [ ] 給定 assistant turn 含同詞,則 不掃不升
+
+## F 件:report 兩段式(event / quarter / year)
+
+- 新工具 `report(scope, ref, slots?)`;ref:event=session_id(須已收案)/ quarter=`YYYYQ1-4` / year=`YYYY`;期界一律錨臺北(`schema.TZ_TAIPEI`)。
+- **phase1**(slots 缺):回 `aggregates`(九維純 code 聚合:案量/結果/模式/照顧者/severity 分布、紅旗數、正向數、乒乓收斂數、promotion、平均輪數)+ `skeleton`(章節骨架:fixed 節已組裝、slot 節帶字數上限與 hint)+ `guardian`(生成前自查指令)。quarter 另附上一季定稿之語意警示(`prev_audit`);year 拉四季最新版,缺季照常出報並回 `missing_quarters`。
+- **phase2**(slots 給):五道驗證依序——槽齊備(缺/多 → `E_MISSING_AXIS`)→ 字數上限 → 負面清單 ∪ 輸出禁用 pattern → 數字白名單(**僅 quarter/year**:slot 數字必 ∈ 聚合值 ∪ ref;event 單案敘事免驗)→ 原文防滲(**僅 quarter/year**:slot 含期內任一自由文本之連續 12 字 → 拒收;隱私降階,單案細節留 event 卡)。未過 → `rejected` + events,不落庫。
+- 過 → **確定性組裝**(章節序 + fixed + slots;**body 禁時間戳**,同輸入逐位元同)→ reports 落庫 version+1 → events `report_audit`。
+- 骨架/槽位/模板/驗證參數單一來源 = `references/report-core.md`(fail-fast 載入);敏感節(safety)僅模板句式:`本{季|年|案}共 {n} 次高警訊,均已附轉介。|無安全警訊。`;季報第二節固定為「正向時刻」。
+
+驗收:
+- [ ] 給定 已收案 session,當 report(event) phase1,則 聚合與骨架齊(fixed 已組、slot 帶上限)
+- [ ] 給定 同 slots 重交 phase2,則 version 遞增且 body 逐位元相同
+- [ ] 給定 slot 含非聚合數字(quarter),則 拒收 `number_not_in_aggregates`
+- [ ] 給定 slot 內含期內 facts 連續 12 字,則 拒收 `raw_text_leak`
+- [ ] 給定 期內有紅旗案,則 safety 節 = 模板句帶數;無則無警訊句
+- [ ] 給定 缺季,當 year,則 照常出報且 missing_quarters 列示
+
+## G 件:safety 分齡安全約束集
+
+- 結構 = **3 風險向底座 × 4 年齡 delta**(僅 child 向疊 delta;parent/third 內容對象非孩子):`safety.base.{child|parent|third}` + `safety.delta.{2-3|4-6|7-11|12+}`,共 7 塊,單一來源 = tags.md,**缺一 fail-fast**(12+ 的 delta 不允許被遺忘);每塊必含 `source` 錨定已出版準則(守門人「1問2應3轉介」、113/1925 專線、兒少權法 53 條),語域調整不自創方法。
+- 組卡 `safety_cards(vector, age_band)` 為確定性查表;vector 取 `sessions.redflag_vector`(首見定格)。
+
+驗收:
+- [ ] 給定 child 向 + 任一 age_band,則 卡 = base.child + 對應 delta(含 source)
+- [ ] 給定 parent/third 向,則 卡無 delta
+- [ ] 給定 tags.md 缺任一 safety 塊或缺 source,則 啟動 fail-fast
+- [ ] 給定 多向先後命中,則 卡依首見向(不覆寫)
+
+## H 件:語意紅線三層(報告)
+
+1. **tripwire(警告不拒收)**:slot 子句同含孩子主詞 + 負面定性詞且無否定前綴(「他不是故意的」豁免)→ `semantic_warnings` 回傳 + events `report_semantic_warning`;照顧者比較句(K 件)同入,**不豁免否定**。詞表單一來源 = wordlists.py `SEMANTIC_*`。
+2. **下期回放**:季報 phase1 把上一季定稿之警示注入 `prev_audit` 固定節(警告不無聲消失)。
+3. **guardian 前置**:report-core.md g1–g5 隨 phase1 回傳,host 生成前自查。
+
+驗收:
+- [ ] 給定 slot 含「他很懶」,則 落庫成功且回 semantic_warnings + 稽核
+- [ ] 給定 「他不是故意的」,則 不觸發
+- [ ] 給定 上季有警示,當 本季 phase1,則 prev_audit 含其回放
+
+## I 件:驗證(WorkOS AuthKit OAuth)
+
+- `AUTH_MODE=local`(預設):無閘,**只准綁 loopback**,違者啟動即拒(fail-fast;取代初版 stderr 警告)。
+- `AUTH_MODE=authkit`:AuthKitProvider(JWKS 驗章/DCR)+ 自訂 allowlist——JWT 過後驗 `sub ∈ ALLOWED_SUBJECTS`,拒絕回 401 + events `auth_denied`(含 sub);`AUTHKIT_DOMAIN/BASE_URL/ALLOWED_SUBJECTS` 缺一拒啟動(allowlist 缺省 = 沒鎖)。
+- 靜態 bearer 閘(`MCP_BEARER_TOKEN`)退役。events payload 一律自動附已驗 sub。
+- **取捨記錄**:spec 偏好 403(已認證未授權),實作為 401——fastmcp ASGI middleware 掛在 auth 前拿不到已驗 sub,卡點只能在 token 驗證層;稽核面等價,runbook 如實陳述。
+
+驗收:
+- [ ] 給定 AUTH_MODE=local + HOST 非 loopback,則 拒啟動
+- [ ] 給定 authkit 三要素缺一,則 拒啟動
+- [ ] 給定 JWT 有效但 sub 不在清單,則 拒絕 + `auth_denied` 留痕;簽章不過則拒但不留痕(網路噪音)
+
+## J 件:信封加密 + 部署/備份基線
+
+- 自由文本欄(sessions.facts/emotion/parent_action、rounds.reaction_note、records.draft/outcome_note/parent_self_note/followup/parent_action、raw_transcripts.turns、reports.body/meta)AES-256-GCM 信封加密;密文 `enc:<key_id>:<nonce>:<ct>`,**多鑰共存可解**(輪替不停機;庫有舊鑰密文前不得撤鑰)。金鑰 env:`ENVELOPE_KEYS`(JSON 鑰圈)+ `ENVELOPE_ACTIVE_KEY_ID`;未設 = 明文直通(僅限本機)。
+- **G0 在 orchestrator 層掃明文**(加密前),db 層透明 enc/dec(Memory/Pg 同語意);events 設計上明文(證據鏈可考)。
+- 遷移 0007 就地加密既有列(需金鑰、冪等、可逆);Dockerfile(Cloud Run)+ 週備份(pg_dump→zstd→age 公鑰加密→私有 GitHub repo);還原演練流程歸 runbook。
+
+驗收:
+- [ ] 給定 金鑰已設,則 庫存密文(直查斷言)、API 回明文、G0 照常命中
+- [ ] 給定 鑰圈含新舊鑰,則 舊密文可解、新寫走 active 鑰;未知 key_id → raise
+- [ ] 給定 備份檔,則 還原庫列數/密文逐位元一致且金鑰可解(演練)
+
+## K 件:多照顧者
+
+- `sessions.caregiver ∈ 爸|媽`(DEFAULT 爸):由已驗 sub 經 `CAREGIVER_MAP`(env JSON)映射,**不收輸入參數**(身分只來自 token);authkit 模式 sub 未映射 → `E_INVALID_STATE` + events `caregiver_unmapped`(不建案);local 恆「爸」。
+- 報告聚合 +`caregiver_dist`(各自照中性計數,stats 節呈現);**不產對比節**,照顧者比較句進 H 件 tripwire。
+
+驗收:
+- [ ] 給定 local 模式,則 caregiver=爸;給定 媽之 sub,則 落「媽」
+- [ ] 給定 未映射 sub,當 ①,則 拒建案 + 稽核
+- [ ] 給定 ① 帶 caregiver 參數,則 直接被拒(不收輸入)
+- [ ] 給定 期內兩人各有案,則 caregiver_dist 各自計數
+
+## 資料模型增補(詳見 record-schema.md v0.3)
+
+- records `schema_version 2→3`:+`redflag`(promotion 排除錨)、+`parent_action`。
+- sessions:+`redflag_active`/`redflag_vector`/`parent_action`/`updated_at`(續期錨)/`caregiver`。
+- side-tables(不動 schema_version):`raw_transcripts`(⑤)、`reports`(F 件);events.session_id 放寬可空(報告級/auth 事件以 payload ref_key/sub 錨定)。
+- 遷移 0004–0008,皆冪等;0007 需金鑰。
+
+## 正文失效對照
+
+| 正文(2026-06-11) | 本節取代為 |
+|---|---|
+| ① G0 短路 →「redflag_stopped 轉介鎖死」(FSM 圖/Tool 表/驗收第 2 條) | A 件:訊號 + 照常建案 + safety_mode |
+| ③ reaction 紅旗 → redflag_stopped + 自動收案 | A 件:訊號 + 照常記輪 + 安全約束集換軌 |
+| 終態三態(finalized/redflag_stopped/expired) | 二態 finalized/expired(redflag_stopped 僅歷史列) |
+| 對 host 暴露 4 個工具 | 6 個(+⑤ archive、report) |
+| mode ∈ live\|rehearsal | + retro(B 件)、resume 為 ① 入口參數(C 件) |
+| 預設綁 127.0.0.1 + bearer 警告 | I 件:local 非 loopback 拒啟動;bearer 退役改 AuthKit |
