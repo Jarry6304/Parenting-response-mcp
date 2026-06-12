@@ -21,6 +21,8 @@ import datetime as _dt
 import json
 from typing import Any, Protocol
 
+from .crypto import Envelope
+
 
 class UniqueViolation(Exception):
     pass
@@ -42,6 +44,40 @@ RECORD_COLUMNS: tuple[str, ...] = (
     # v3.2(schema_version=3):A 件 promotion 排除錨 / B 件 retro 當時實際處理
     "redflag", "parent_action",
 )
+
+# ── 信封加密(v3.2 J 件):自由文本欄位清單(單一來源;0007 遷移同引) ──
+# G0 在 orchestrator 層先掃明文,本層透明 enc/dec——應用見明文、庫存密文。
+ENCRYPTED_SESSION_FIELDS: tuple[str, ...] = ("facts", "emotion", "parent_action")
+ENCRYPTED_ROUND_FIELDS: tuple[str, ...] = ("reaction_note",)
+ENCRYPTED_RECORD_FIELDS: tuple[str, ...] = (
+    "draft", "outcome_note", "parent_self_note", "followup", "parent_action")
+ENCRYPTED_TRANSCRIPT_FIELDS: tuple[str, ...] = ("turns",)
+ENCRYPTED_REPORT_FIELDS: tuple[str, ...] = ("body", "meta")
+
+
+def _enc_row(env: "Envelope | None", row: dict[str, Any],
+             fields: tuple[str, ...]) -> dict[str, Any]:
+    if env is None:
+        return row
+    out = dict(row)
+    for f in fields:
+        v = out.get(f)
+        if isinstance(v, str) and v:
+            out[f] = env.encrypt(v)
+    return out
+
+
+def _dec_row(env: "Envelope | None", row: dict[str, Any],
+             fields: tuple[str, ...]) -> dict[str, Any]:
+    if env is None:
+        return row
+    out = dict(row)
+    for f in fields:
+        v = out.get(f)
+        if isinstance(v, str) and v:
+            out[f] = env.decrypt(v)
+    return out
+
 
 # 稽核事件(append-only;defect-fixes #7/#8):G0 命中(兩級)與 ④ pattern 拒收
 # 一律落庫——severity 與拒收皆可重建緣由;0003 遷移與 ensure_schema 共用,單一來源。
@@ -231,10 +267,11 @@ class Database(Protocol):
 
 
 class MemoryDatabase:
-    """同不變量語意的記憶體實作(測試用)。"""
+    """同不變量語意的記憶體實作(測試用;含同款信封加密層)。"""
 
-    def __init__(self) -> None:
+    def __init__(self, envelope: Envelope | None = None) -> None:
         self._lock = asyncio.Lock()
+        self._env = envelope  # None = 明文直通(與 PgDatabase 同語意)
         self._sessions: dict[str, dict[str, Any]] = {}
         self._rounds: dict[str, list[dict[str, Any]]] = {}
         self._records: dict[str, dict[str, Any]] = {}
@@ -248,7 +285,7 @@ class MemoryDatabase:
             sid = row["session_id"]
             if sid in self._sessions:
                 raise UniqueViolation(f"session {sid} 已存在")
-            stored = dict(row)
+            stored = _enc_row(self._env, dict(row), ENCRYPTED_SESSION_FIELDS)
             now = _dt.datetime.now(_dt.timezone.utc)
             stored.setdefault("created_at", now)  # PG: DEFAULT now()
             stored.setdefault("updated_at", now)  # PG: DEFAULT now()(C 件 TTL 續期錨)
@@ -257,11 +294,12 @@ class MemoryDatabase:
 
     async def get_session(self, session_id: str) -> dict[str, Any] | None:
         row = self._sessions.get(session_id)
-        return dict(row) if row else None
+        return _dec_row(self._env, dict(row), ENCRYPTED_SESSION_FIELDS) if row else None
 
     async def list_open_sessions(self, child_id: str) -> list[dict[str, Any]]:
         # 入口 ask-gate 的「續上次」清單(v3.2 C 件);最近活動在前
-        rows = [dict(s) for s in self._sessions.values()
+        rows = [_dec_row(self._env, dict(s), ENCRYPTED_SESSION_FIELDS)
+                for s in self._sessions.values()
                 if s["child_id"] == child_id and s["status"] == "open"]
         rows.sort(key=lambda r: r.get("updated_at") or r["created_at"], reverse=True)
         return rows
@@ -271,6 +309,7 @@ class MemoryDatabase:
             safe = {k: v for k, v in fields.items() if k in SESSION_COLUMNS and k != "session_id"}
             if not safe:
                 return
+            safe = _enc_row(self._env, safe, ENCRYPTED_SESSION_FIELDS)
             safe.setdefault("updated_at", _dt.datetime.now(_dt.timezone.utc))  # 活動即續期
             self._sessions[session_id].update(safe)  # 與 PgDatabase 同白名單語意
 
@@ -282,25 +321,26 @@ class MemoryDatabase:
         async with self._lock:
             rounds = self._rounds[session_id]
             round_no = (rounds[-1]["round_no"] + 1) if rounds else 0  # server 取 max+1
-            rounds.append({
+            rounds.append(_enc_row(self._env, {
                 "session_id": session_id, "round_no": round_no,
                 "child_reaction": child_reaction, "reaction_note": reaction_note,
                 "card": card, "core_outputs": core_outputs,
                 "synthesis_trace": synthesis_trace, "degraded": degraded,
                 "created_at": _dt.datetime.now(_dt.timezone.utc),  # PG: DEFAULT now()
-            })
+            }, ENCRYPTED_ROUND_FIELDS))
             return round_no
 
     async def get_rounds(self, session_id: str) -> list[dict[str, Any]]:
-        return [dict(r) for r in self._rounds.get(session_id, [])]
+        return [_dec_row(self._env, dict(r), ENCRYPTED_ROUND_FIELDS)
+                for r in self._rounds.get(session_id, [])]
 
     async def get_record(self, record_id: str) -> dict[str, Any] | None:
         row = self._records.get(record_id)
-        return dict(row) if row else None
+        return _dec_row(self._env, dict(row), ENCRYPTED_RECORD_FIELDS) if row else None
 
     async def get_record_by_session(self, session_id: str) -> dict[str, Any] | None:
         rid = self._records_by_session.get(session_id)
-        return dict(self._records[rid]) if rid else None
+        return _dec_row(self._env, dict(self._records[rid]), ENCRYPTED_RECORD_FIELDS) if rid else None
 
     async def count_records_with_prefix(self, prefix: str) -> int:
         return sum(1 for rid in self._records if rid.startswith(prefix))
@@ -336,23 +376,28 @@ class MemoryDatabase:
     async def list_sessions_between(
         self, start: _dt.datetime, end: _dt.datetime,
     ) -> list[dict[str, Any]]:
-        return [dict(s) for s in self._sessions.values()
-                if start <= s["created_at"] < end]
+        return [_dec_row(self._env, dict(s), ENCRYPTED_SESSION_FIELDS)
+                for s in self._sessions.values() if start <= s["created_at"] < end]
 
     async def list_records_between(
         self, start: _dt.datetime, end: _dt.datetime,
     ) -> list[dict[str, Any]]:
-        return [dict(r) for r in self._records.values()
-                if start <= r["created_at"] < end]
+        return [_dec_row(self._env, dict(r), ENCRYPTED_RECORD_FIELDS)
+                for r in self._records.values() if start <= r["created_at"] < end]
 
     async def list_rounds_for_sessions(
         self, session_ids: list[str],
     ) -> dict[str, list[dict[str, Any]]]:
-        return {sid: [dict(r) for r in self._rounds.get(sid, [])] for sid in session_ids}
+        return {sid: [_dec_row(self._env, dict(r), ENCRYPTED_ROUND_FIELDS)
+                      for r in self._rounds.get(sid, [])]
+                for sid in session_ids}
 
     async def get_report_latest(self, scope: str, ref_key: str) -> dict[str, Any] | None:
         rows = [r for r in self._reports if r["scope"] == scope and r["ref_key"] == ref_key]
-        return dict(max(rows, key=lambda r: r["version"])) if rows else None
+        if not rows:
+            return None
+        latest = max(rows, key=lambda r: r["version"])
+        return _dec_row(self._env, dict(latest), ENCRYPTED_REPORT_FIELDS)
 
     async def insert_report(
         self, scope: str, ref_key: str, *, body: str, meta_json: str,
@@ -366,8 +411,8 @@ class MemoryDatabase:
                 "body": body, "meta": meta_json,
                 "created_at": _dt.datetime.now(_dt.timezone.utc),
             }
-            self._reports.append(row)
-            return dict(row)
+            self._reports.append(_enc_row(self._env, row, ENCRYPTED_REPORT_FIELDS))
+            return dict(row)  # 回呼叫端明文(insert 的回顯)
 
     async def insert_transcript(
         self, session_id: str, *, chunk_no: int, content_hash: str, turns_json: str,
@@ -375,17 +420,18 @@ class MemoryDatabase:
         async with self._lock:
             rows = self._transcripts.setdefault(session_id, [])
             if any(r["content_hash"] == content_hash for r in rows):
-                return None  # UNIQUE(session_id, content_hash):重送冪等
+                return None  # UNIQUE(session_id, content_hash):重送冪等(hash 算明文)
             tid = sum(len(v) for v in self._transcripts.values())
-            rows.append({
+            rows.append(_enc_row(self._env, {
                 "transcript_id": tid, "session_id": session_id, "chunk_no": chunk_no,
                 "content_hash": content_hash, "turns": turns_json,
                 "created_at": _dt.datetime.now(_dt.timezone.utc),
-            })
+            }, ENCRYPTED_TRANSCRIPT_FIELDS))
             return tid
 
     async def get_transcripts(self, session_id: str) -> list[dict[str, Any]]:
-        return [dict(r) for r in self._transcripts.get(session_id, [])]
+        return [_dec_row(self._env, dict(r), ENCRYPTED_TRANSCRIPT_FIELDS)
+                for r in self._transcripts.get(session_id, [])]
 
     async def finalize_tx(
         self, session_id: str, *, terminal_status: str,
@@ -401,8 +447,8 @@ class MemoryDatabase:
             if session_id in self._records_by_session:
                 raise UniqueViolation(f"session {session_id} 已有 record")
             session["status"] = terminal_status
-            session.update(session_updates)
-            stored = dict(record_row)
+            session.update(_enc_row(self._env, session_updates, ENCRYPTED_SESSION_FIELDS))
+            stored = _enc_row(self._env, dict(record_row), ENCRYPTED_RECORD_FIELDS)
             stored.setdefault("created_at", _dt.datetime.now(_dt.timezone.utc))  # PG: DEFAULT now()
             self._records[rid] = stored
             self._records_by_session[session_id] = rid
@@ -410,11 +456,12 @@ class MemoryDatabase:
 
 
 class PgDatabase:
-    """psycopg3(async)實作;不變量由 PG schema 承載。"""
+    """psycopg3(async)實作;不變量由 PG schema 承載,自由文本信封加密。"""
 
-    def __init__(self, dsn: str) -> None:
+    def __init__(self, dsn: str, envelope: Envelope | None = None) -> None:
         from psycopg_pool import AsyncConnectionPool
 
+        self._env = envelope  # None = 明文直通(local dev;雲上必設)
         self._pool = AsyncConnectionPool(dsn, open=False, kwargs={"autocommit": True})
 
     async def open(self) -> None:
@@ -439,6 +486,9 @@ class PgDatabase:
     async def create_session(self, row: dict[str, Any]) -> None:
         from psycopg import sql
 
+        row = _enc_row(self._env, dict(row), ENCRYPTED_SESSION_FIELDS)
+        # 全列 INSERT 不可顯式插 NULL 蓋掉 DEFAULT now()(與 Memory setdefault 同語意)
+        row.setdefault("updated_at", _dt.datetime.now(_dt.timezone.utc))
         stmt = sql.SQL("INSERT INTO sessions ({cols}) VALUES ({ph})").format(
             cols=sql.SQL(", ").join(sql.Identifier(c) for c in SESSION_COLUMNS),
             ph=sql.SQL(", ").join(sql.Placeholder() for _ in SESSION_COLUMNS),
@@ -451,7 +501,8 @@ class PgDatabase:
     async def get_session(self, session_id: str) -> dict[str, Any] | None:
         async with self._pool.connection() as conn:
             cur = await conn.execute("SELECT * FROM sessions WHERE session_id = %s", (session_id,))
-            return await self._fetchone_dict(cur)
+            row = await self._fetchone_dict(cur)
+            return _dec_row(self._env, row, ENCRYPTED_SESSION_FIELDS) if row else None
 
     async def list_open_sessions(self, child_id: str) -> list[dict[str, Any]]:
         async with self._pool.connection() as conn:
@@ -462,7 +513,8 @@ class PgDatabase:
                 """,
                 (child_id,),
             )
-            return await self._fetchall_dicts(cur)
+            return [_dec_row(self._env, r, ENCRYPTED_SESSION_FIELDS)
+                    for r in await self._fetchall_dicts(cur)]
 
     async def update_session(self, session_id: str, fields: dict[str, Any]) -> None:
         from psycopg import sql
@@ -470,6 +522,7 @@ class PgDatabase:
         safe = {k: v for k, v in fields.items() if k in SESSION_COLUMNS and k != "session_id"}
         if not safe:
             return
+        safe = _enc_row(self._env, safe, ENCRYPTED_SESSION_FIELDS)
         safe.setdefault("updated_at", _dt.datetime.now(_dt.timezone.utc))  # 活動即續期
         stmt = sql.SQL("UPDATE sessions SET {sets} WHERE session_id = {ph}").format(
             sets=sql.SQL(", ").join(
@@ -485,6 +538,8 @@ class PgDatabase:
         card: dict[str, Any] | None, core_outputs: dict[str, Any], synthesis_trace: dict[str, Any],
         degraded: bool,
     ) -> int:
+        if self._env is not None and reaction_note:
+            reaction_note = self._env.encrypt(reaction_note)
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """
@@ -506,17 +561,20 @@ class PgDatabase:
             cur = await conn.execute(
                 "SELECT * FROM rounds WHERE session_id = %s ORDER BY round_no", (session_id,)
             )
-            return await self._fetchall_dicts(cur)
+            return [_dec_row(self._env, r, ENCRYPTED_ROUND_FIELDS)
+                    for r in await self._fetchall_dicts(cur)]
 
     async def get_record(self, record_id: str) -> dict[str, Any] | None:
         async with self._pool.connection() as conn:
             cur = await conn.execute("SELECT * FROM records WHERE record_id = %s", (record_id,))
-            return await self._fetchone_dict(cur)
+            row = await self._fetchone_dict(cur)
+            return _dec_row(self._env, row, ENCRYPTED_RECORD_FIELDS) if row else None
 
     async def get_record_by_session(self, session_id: str) -> dict[str, Any] | None:
         async with self._pool.connection() as conn:
             cur = await conn.execute("SELECT * FROM records WHERE session_id = %s", (session_id,))
-            return await self._fetchone_dict(cur)
+            row = await self._fetchone_dict(cur)
+            return _dec_row(self._env, row, ENCRYPTED_RECORD_FIELDS) if row else None
 
     async def count_records_with_prefix(self, prefix: str) -> int:
         async with self._pool.connection() as conn:
@@ -558,6 +616,8 @@ class PgDatabase:
     async def insert_transcript(
         self, session_id: str, *, chunk_no: int, content_hash: str, turns_json: str,
     ) -> int | None:
+        if self._env is not None:
+            turns_json = self._env.encrypt(turns_json)  # hash 已在 orchestrator 算明文
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """
@@ -577,7 +637,8 @@ class PgDatabase:
                 "SELECT * FROM raw_transcripts WHERE session_id = %s ORDER BY transcript_id",
                 (session_id,),
             )
-            return await self._fetchall_dicts(cur)
+            return [_dec_row(self._env, r, ENCRYPTED_TRANSCRIPT_FIELDS)
+                    for r in await self._fetchall_dicts(cur)]
 
     async def list_sessions_between(
         self, start: _dt.datetime, end: _dt.datetime,
@@ -587,7 +648,8 @@ class PgDatabase:
                 "SELECT * FROM sessions WHERE created_at >= %s AND created_at < %s",
                 (start, end),
             )
-            return await self._fetchall_dicts(cur)
+            return [_dec_row(self._env, r, ENCRYPTED_SESSION_FIELDS)
+                    for r in await self._fetchall_dicts(cur)]
 
     async def list_records_between(
         self, start: _dt.datetime, end: _dt.datetime,
@@ -597,7 +659,8 @@ class PgDatabase:
                 "SELECT * FROM records WHERE created_at >= %s AND created_at < %s",
                 (start, end),
             )
-            return await self._fetchall_dicts(cur)
+            return [_dec_row(self._env, r, ENCRYPTED_RECORD_FIELDS)
+                    for r in await self._fetchall_dicts(cur)]
 
     async def list_rounds_for_sessions(
         self, session_ids: list[str],
@@ -612,7 +675,7 @@ class PgDatabase:
             rows = await self._fetchall_dicts(cur)
         out: dict[str, list[dict[str, Any]]] = {sid: [] for sid in session_ids}
         for r in rows:
-            out[str(r["session_id"])].append(r)
+            out[str(r["session_id"])].append(_dec_row(self._env, r, ENCRYPTED_ROUND_FIELDS))
         return out
 
     async def get_report_latest(self, scope: str, ref_key: str) -> dict[str, Any] | None:
@@ -624,24 +687,29 @@ class PgDatabase:
                 """,
                 (scope, ref_key),
             )
-            return await self._fetchone_dict(cur)
+            row = await self._fetchone_dict(cur)
+            return _dec_row(self._env, row, ENCRYPTED_REPORT_FIELDS) if row else None
 
     async def insert_report(
         self, scope: str, ref_key: str, *, body: str, meta_json: str,
     ) -> dict[str, Any]:
+        enc_body, enc_meta = body, meta_json
+        if self._env is not None:
+            enc_body = self._env.encrypt(body)
+            enc_meta = self._env.encrypt(meta_json)
         async with self._pool.connection() as conn:
             cur = await conn.execute(
                 """
                 INSERT INTO reports (scope, ref_key, version, body, meta)
                 SELECT %s, %s, COALESCE(MAX(version), 0) + 1, %s, %s
                 FROM reports WHERE scope = %s AND ref_key = %s
-                RETURNING report_id, scope, ref_key, version, body, meta, created_at
+                RETURNING report_id, scope, ref_key, version, created_at
                 """,
-                (scope, ref_key, body, meta_json, scope, ref_key),
+                (scope, ref_key, enc_body, enc_meta, scope, ref_key),
             )
             row = await self._fetchone_dict(cur)
             assert row is not None
-            return row
+            return {**row, "body": body, "meta": meta_json}  # 回顯明文
 
     async def finalize_tx(
         self, session_id: str, *, terminal_status: str,
@@ -651,6 +719,8 @@ class PgDatabase:
         from psycopg import sql
 
         safe = {k: v for k, v in session_updates.items() if k in SESSION_COLUMNS and k != "session_id"}
+        safe = _enc_row(self._env, safe, ENCRYPTED_SESSION_FIELDS)
+        record_row = _enc_row(self._env, record_row, ENCRYPTED_RECORD_FIELDS)
         set_parts = [sql.SQL("status = {}").format(sql.Placeholder())]
         set_parts.extend(
             sql.SQL("{} = {}").format(sql.Identifier(k), sql.Placeholder()) for k in safe

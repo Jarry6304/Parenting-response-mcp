@@ -190,9 +190,11 @@ def main() -> None:
     """
     import asyncio
 
+    from .crypto import Envelope
     from .db import PgDatabase
 
     dsn = os.environ["DATABASE_URL"]
+    envelope = Envelope.from_env()  # 未設 ENVELOPE_KEYS → 明文直通(local dev)
     # secure-by-default:預設只綁 loopback;對外(Cloud Run)= authkit 模式 + HOST=0.0.0.0
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
@@ -201,7 +203,7 @@ def main() -> None:
     validate_binding(mode, host)  # local + 非 loopback → 拒啟動(個資面)
 
     async def _run() -> None:
-        db = PgDatabase(dsn)
+        db = PgDatabase(dsn, envelope=envelope)
         await db.open()
         await db.ensure_schema()
         auth = build_auth(
