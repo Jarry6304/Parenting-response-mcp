@@ -16,7 +16,7 @@ import datetime as _dt
 import uuid
 from typing import Any
 
-from .cores import inquiry_probes, red_line_union, response_tags, safety_cards
+from .cores import inquiry_probes, red_line_union, response_tags, review_tags, safety_cards
 from .db import Database, UniqueViolation
 from .redflag import check_shortcircuit, check_warning
 from .schema import (
@@ -131,7 +131,7 @@ class Orchestrator:
     async def prerequisites(
         self, *, session_id: str, age_band: str | None,
         emotion_intensity: str | None, problem_category: str | None,
-        script_decision: str | None,
+        script_decision: str | None, parent_action: str | None = None,
     ) -> dict[str, Any]:
         s = await self._require_stage(session_id, "constrained")
 
@@ -139,6 +139,25 @@ class Orchestrator:
             raise PRError(E_MISSING_AXIS, "② 必填:age_band(2-3|4-6|7-11|12+)/ emotion_intensity(低|中|高)")
         if problem_category is not None and problem_category not in PROBLEM_CATEGORIES:
             raise PRError(E_MISSING_AXIS, f"problem_category 不在受控詞表:{problem_category}")
+        # v3.2 B 件:retro 必交「當時實際怎麼處理」——覆盤的素材,缺之 ③ 無從回看
+        if str(s["mode"]) == "retro" and not parent_action:
+            raise PRError(E_MISSING_AXIS, "② retro 模式必填 parent_action(當時你實際怎麼處理)")
+
+        # G0 複檢(② 唯一自由文本 parent_action;「每個入口都是檢查點」)——
+        # 家長自陳的當時處理可能本身就是警訊(已失手/罰跪),訊號照落、不擋推進。
+        rf = None
+        if parent_action:
+            labeled = (("parent_action", parent_action),)
+            rf = check_shortcircuit(labeled)
+            warning_hits = check_warning(labeled)
+            if rf is not None:
+                await self.db.update_session(session_id, self._redflag_updates(s, rf))
+                s = await self._require_stage(session_id, "constrained")  # 重讀已更新旗標
+            elif warning_hits:
+                await self.db.update_session(
+                    session_id, {"severity": self._raise(s.get("severity"), "高")})
+            if rf is not None or warning_hits:
+                await self._log_g0(session_id, "②", rf=rf, warnings=warning_hits)
 
         # 正向紀錄硬閘:缺 script_decision → ask-gate,不解鎖任何後續
         if problem_category == POSITIVE_LOG and script_decision not in SCRIPT_DECISIONS:
@@ -150,6 +169,8 @@ class Orchestrator:
             "problem_category": problem_category,
             "is_positive_log": problem_category == POSITIVE_LOG,
         }
+        if parent_action:
+            updates["parent_action"] = parent_action  # ④ 落 record.parent_action
         if emotion_intensity == "高":
             updates["severity"] = self._raise(s.get("severity"), "中")
 
@@ -160,7 +181,12 @@ class Orchestrator:
 
         updates["stage"] = "ready"
         await self.db.update_session(session_id, updates)
-        return {"next": "core_tags"}
+        result: dict[str, Any] = {"next": "core_tags"}
+        if rf is not None:  # 轉介必達(回傳形狀僅命中時擴充,回溯相容)
+            result["redflag"] = rf.model_dump()
+            result["referral"] = rf.referral
+            result["safety_mode"] = True
+        return result
 
     # ── ③ core_tags(乒乓,可 ×n) ─────────────────────────────────
 
@@ -170,6 +196,11 @@ class Orchestrator:
         s = await self._require_stage(session_id, "ready")
         rounds = await self.db.get_rounds(session_id)
         round_no = len(rounds)
+
+        # v3.2 B 件:retro 覆盤限一輪(③×1)——事件已結束,無乒乓可言
+        is_retro = str(s["mode"]) == "retro"
+        if is_retro and round_no > 0:
+            raise PRError(E_INVALID_STATE, "retro 覆盤限一輪(③×1);後續請直接 finalize")
 
         rf: Redflag | None = None
         warning_hit = False
@@ -205,9 +236,14 @@ class Orchestrator:
 
         safety_mode = bool(s.get("redflag_active"))
         prior_reactions: list[str | None] = [r.get("child_reaction") for r in rounds]
-        # safety_mode 下不出收斂訊號——D3 是管教乒乓的規則,危機陪伴不適用
-        converged = (False if safety_mode
-                     else self._converged(child_reaction, round_no, prior_reactions, warning_hit))
+        # safety_mode 下不出收斂訊號(危機陪伴不適用 D3);retro 無乒乓 → null
+        converged: bool | None
+        if is_retro:
+            converged = None
+        elif safety_mode:
+            converged = False
+        else:
+            converged = self._converged(child_reaction, round_no, prior_reactions, warning_hit)
 
         band = str(s["age_band"])
         stages = {"erikson": ERIKSON_BY_BAND[band],  # 確定性查表,不經 LLM(與風險無關,照回)
@@ -226,10 +262,13 @@ class Orchestrator:
             result = {"safety_mode": True,
                       "safety_tags": safety_cards(vector, band),
                       "dev_stages": stages, "converged": converged,
-                      "next": "core_tags | finalize"}
+                      "next": "finalize" if is_retro else "core_tags | finalize"}
         else:
             result = {"response_tags": self._response_tags(primary), "dev_stages": stages,
                       "converged": converged, "next": "core_tags | finalize"}
+            if is_retro:  # B 件:六校覆盤鏡頭(回看 parent_action);③×1 故下一步只有 ④
+                result["review_tags"] = review_tags()
+                result["next"] = "finalize"
         if rf is not None:  # 本輪命中:轉介必達
             result["redflag"] = rf.model_dump()
             result["referral"] = rf.referral

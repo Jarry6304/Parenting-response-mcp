@@ -25,6 +25,8 @@ _BLOCK_RE = re.compile(r"```text\n(.*?)```", re.DOTALL)
 
 RESPONSE_TAG_KEYS: tuple[str, ...] = ("理念", "套用", "示範", "紅線")
 INQUIRY_TAG_KEYS: tuple[str, ...] = ("探詢", "探點", "示範問", "紅線")
+# v3.2 B 件:retro 覆盤鏡頭(僅 6 回應核心;探詢核心職責是探孩子內心,不作覆盤)
+REVIEW_TAG_KEYS: tuple[str, ...] = ("視角", "操作", "示範")
 
 # v3.2 G 件:3 風險向底座 × 4 年齡 delta = 7 塊全顯式,不允許靜默 fallback
 SAFETY_VECTORS: tuple[str, ...] = ("child", "parent", "third")
@@ -79,6 +81,15 @@ def _load() -> dict[str, dict[str, str]]:
             if not fields.get(key):
                 raise RuntimeError(f"{_TAGS_PATH} 學派 {school} 缺欄位或值為空:{key}")
 
+    # v3.2 B 件:覆盤 6 塊 fail-fast(retro ③ 的素材,缺一拒啟動)
+    for school in RESPONSE_CORES:
+        fields = tags.get(f"{school}.覆盤")
+        if fields is None:
+            raise RuntimeError(f"{_TAGS_PATH} 缺覆盤區塊:{school}.覆盤")
+        for key in REVIEW_TAG_KEYS:
+            if not fields.get(key):
+                raise RuntimeError(f"{_TAGS_PATH} 覆盤 {school}.覆盤 缺欄位或值為空:{key}")
+
     # v3.2 G 件:safety 7 塊 fail-fast——12+ 的 delta 是最關鍵的一塊,
     # fallback 等於允許它被遺忘,故缺塊/缺 source 一律拒啟動(「無補充」須顯式)。
     for block in SAFETY_BLOCKS:
@@ -113,6 +124,12 @@ def red_line_union() -> list[dict[str, str]]:
     """8 校(6 回應 + 2 探詢)紅線聯集,① 約束集成分。"""
     loaded = _load()
     return [{"school": s, "rule": loaded[s]["紅線"]} for s in (*RESPONSE_CORES, *INQUIRY_CORES)]
+
+
+def review_tags() -> list[dict[str, Any]]:
+    """retro 覆盤鏡頭(spec v3.2 B 件):6 回應核心各自的「視角/操作/示範」。"""
+    loaded = _load()
+    return [{"school": s, "tag": dict(loaded[f"{s}.覆盤"])} for s in RESPONSE_CORES]
 
 
 def safety_cards(vector: str, age_band: str | None) -> dict[str, Any]:

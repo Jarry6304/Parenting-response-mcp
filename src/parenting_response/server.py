@@ -34,7 +34,7 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
     ) -> dict[str, Any]:
         """① 約束探詢(內含 G0 訊號)。
 
-        必要:`facts / emotion / mode`(mode ∈ live|rehearsal)。
+        必要:`facts / emotion / mode`(mode ∈ live|rehearsal|retro;retro=事後覆盤)。
         過 → 回 {session_id, 禁用詞+紅線約束集, Maslow/Satir 探點}(引導 S1);
         G0 短路命中(v3.2 訊號,不停案)→ 照常建案,另回 {redflag, referral,
         safety_mode=true}——轉介請立即向家長送達,後續 ③ 將換安全約束集。
@@ -54,10 +54,12 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         emotion_intensity: str | None = None,
         problem_category: str | None = None,
         script_decision: str | None = None,
+        parent_action: str | None = None,
     ) -> dict[str, Any]:
         """② 必備條件(+ 正向紀錄硬閘)。
 
         驗 `age_band ∈ 2-3|4-6|7-11|12+`、`emotion_intensity ∈ 低|中|高`。
+        retro 模式必填 `parent_action`(當時你實際怎麼處理;進 G0 複檢)。
         正向紀錄且缺 `script_decision ∈ skip|generate` → 回 ask-gate(不解鎖);
         skip → 走 short ④;generate / 一般 → 解鎖 ③。
         """
@@ -66,6 +68,7 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
                 session_id=session_id, age_band=age_band,
                 emotion_intensity=emotion_intensity,
                 problem_category=problem_category, script_decision=script_decision,
+                parent_action=parent_action,
             )
         except PRError as exc:
             raise ToolError(str(exc)) from exc

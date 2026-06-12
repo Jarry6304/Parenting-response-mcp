@@ -29,7 +29,7 @@ class PRError(Exception):
 # ── 受控詞表(record-schema.md 鎖定值域) ──────────────────────────
 
 Mode = Literal["live", "rehearsal"]
-MODES: tuple[str, ...] = ("live", "rehearsal")
+MODES: tuple[str, ...] = ("live", "rehearsal", "retro")  # retro = 事後覆盤(v3.2 B 件)
 
 AgeBand = Literal["2-3", "4-6", "7-11", "12+"]  # 0-2 刻意範圍外(C3)
 AGE_BANDS: tuple[str, ...] = ("2-3", "4-6", "7-11", "12+")
