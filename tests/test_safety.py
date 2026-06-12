@@ -1,4 +1,4 @@
-"""v3.2 A 件(G0 閘→訊號)+ G 件(safety 分齡內容)驗收。
+"""v3.0 A 件(G0 閘→訊號)+ G 件(safety 分齡內容)驗收。
 
 A:輸入永不停案(redflag_stopped 不再產生)、訊號單調、promotion 排除;
 G:3 風險向 × 4 年齡 delta 組卡、7 塊 fail-fast、source 錨定。
@@ -19,7 +19,7 @@ from parenting_response.schema import AGE_BANDS
 
 async def test_no_redflag_stopped_terminal_anywhere(client: Client, db: MemoryDatabase) -> None:
     """A 核心:①③④ 全入口短路命中,session 一律照常推進——
-    v3.2 起無任何路徑產生 redflag_stopped 終態。"""
+    本輪改版起無任何路徑產生 redflag_stopped 終態。"""
     # ① 命中
     r1 = data_of(await client.call_tool("constraints", constraints_args(
         facts="他說他不想活了", emotion="害怕")))

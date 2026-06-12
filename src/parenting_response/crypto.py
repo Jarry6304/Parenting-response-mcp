@@ -1,4 +1,4 @@
-"""信封加密(v3.2 J 件):自由文本欄位 AES-256-GCM,金鑰只在 env(Secret Manager)。
+"""信封加密(v3.0 J 件):自由文本欄位 AES-256-GCM,金鑰只在 env(Secret Manager)。
 
 威脅模型:Neon 雲庫外洩 / 備份檔外流時,自由文本(facts/draft/逐字稿/報告)
 不可讀。**G0 掃描在 orchestrator 層(加密前)**,db 層透明加解密——

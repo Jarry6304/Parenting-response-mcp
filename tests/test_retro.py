@@ -1,4 +1,4 @@
-"""v3.2 B 件:retro 事後覆盤 mode——② parent_action 必填、③×1 回覆盤鏡頭、
+"""v3.0 B 件:retro 事後覆盤 mode——② parent_action 必填、③×1 回覆盤鏡頭、
 converged=null、record.parent_action 落庫。"""
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""report-core 載入器(v3.2 F/H 件):解析 references/report-core.md。
+"""report-core 載入器(v3.0 F/H 件):解析 references/report-core.md。
 
 單一事實來源 = report-core.md(章節結構/槽位參數/guardian/驗證參數);
 本模組只做解析與 fail-fast 完整性驗證,**零 LLM**。改骨架改文件,不改 code。

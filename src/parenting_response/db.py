@@ -32,7 +32,7 @@ SESSION_COLUMNS: tuple[str, ...] = (
     "session_id", "child_id", "mode", "status", "stage", "age_band", "facts", "emotion",
     "emotion_intensity", "safety_flag", "severity", "is_positive_log",
     "problem_category", "confounders", "parent_goal", "goal_aligned", "linked_plan_id",
-    # v3.2:A 件 G0 訊號(旗標+風險向)/ B 件 retro 暫存 / C 件 TTL 續期錨 / K 件照顧者
+    # v3.0:A 件 G0 訊號(旗標+風險向)/ B 件 retro 暫存 / C 件 TTL 續期錨 / K 件照顧者
     "redflag_active", "redflag_vector", "parent_action", "updated_at", "caregiver",
 )
 
@@ -41,11 +41,11 @@ RECORD_COLUMNS: tuple[str, ...] = (
     "dreikurs_purpose", "maslow_need", "erikson_stage", "piaget_stage", "dev_normative",
     "claimed_sources", "draft",
     "outcome", "outcome_note", "parent_self_note", "followup", "tools_used", "posture",
-    # v3.2(schema_version=3):A 件 promotion 排除錨 / B 件 retro 當時實際處理
+    # v3.0(schema_version=3):A 件 promotion 排除錨 / B 件 retro 當時實際處理
     "redflag", "parent_action",
 )
 
-# ── 信封加密(v3.2 J 件):自由文本欄位清單(單一來源;0007 遷移同引) ──
+# ── 信封加密(v3.0 J 件):自由文本欄位清單(單一來源;0007 遷移同引) ──
 # G0 在 orchestrator 層先掃明文,本層透明 enc/dec——應用見明文、庫存密文。
 ENCRYPTED_SESSION_FIELDS: tuple[str, ...] = ("facts", "emotion", "parent_action")
 ENCRYPTED_ROUND_FIELDS: tuple[str, ...] = ("reaction_note",)
@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_session_idx ON events (session_id);
 """
 
-# 原始逐字稿(v3.2 E 件;append-only side-table,不動 records schema_version):
+# 原始逐字稿(v3.0 E 件;append-only side-table,不動 records schema_version):
 # turns 存 JSON 文字(TEXT 而非 JSONB——0007 就地加密就緒);
 # UNIQUE(session_id, content_hash) 承載冪等(同 chunk 重送不重複落)。
 # 0005 遷移與 ensure_schema 共用,單一來源。
@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS raw_transcripts (
 CREATE INDEX IF NOT EXISTS raw_transcripts_session_idx ON raw_transcripts (session_id);
 """
 
-# 報告定稿(v3.2 F 件;同 ref 多版,version 遞增,最新版為「定稿」):
+# 報告定稿(v3.0 F 件;同 ref 多版,version 遞增,最新版為「定稿」):
 # body 為確定性組裝全文(TEXT,0007 加密就緒);meta 存聚合快照/slots/語意警示
 # (季報回放讀上一季 meta.semantic_warnings)。0006 遷移與 ensure_schema 共用。
 DDL_REPORTS = """
@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 """
 
-# v3.2 0006:報告級/auth 事件無 session 錨(payload 帶 ref_key/sub)→
+# v3.0 0006:報告級/auth 事件無 session 錨(payload 帶 ref_key/sub)→
 # events.session_id 放寬可空;reports 表見 DDL_REPORTS。
 DDL_MIGRATE_0006 = """
 ALTER TABLE events ALTER COLUMN session_id DROP NOT NULL;
@@ -209,7 +209,7 @@ UPDATE sessions SET stage = CASE status WHEN 'open' THEN 'ready' ELSE status END
 WHERE stage IS NULL;
 """
 
-# v3.0 → v3.2 升級(冪等;migration 0004 與 ensure_schema 共用,單一來源):
+# v3.0 → v3.0 升級(冪等;migration 0004 與 ensure_schema 共用,單一來源):
 # A 件 G0 訊號欄 + B 件 parent_action + C 件 updated_at(回填=created_at,TTL 續期錨);
 # records schema_version 2→3(record-schema.md 版本管理)。
 # legacy redflag_stopped 列不回填——歷史終態,查詢視同 closed。
@@ -226,7 +226,7 @@ ALTER TABLE records ADD COLUMN IF NOT EXISTS parent_action TEXT;
 ALTER TABLE records ALTER COLUMN schema_version SET DEFAULT 3;
 """
 
-# v3.2 0008(K 件):caregiver 由已驗 sub 映射(CAREGIVER_MAP),不收輸入參數;
+# v3.0 0008(K 件):caregiver 由已驗 sub 映射(CAREGIVER_MAP),不收輸入參數;
 # 既有列回填 DEFAULT '爸'(單人時期的事實)。
 DDL_MIGRATE_0008 = """
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS caregiver TEXT NOT NULL DEFAULT '爸';
@@ -304,7 +304,7 @@ class MemoryDatabase:
         return _dec_row(self._env, dict(row), ENCRYPTED_SESSION_FIELDS) if row else None
 
     async def list_open_sessions(self, child_id: str) -> list[dict[str, Any]]:
-        # 入口 ask-gate 的「續上次」清單(v3.2 C 件);最近活動在前
+        # 入口 ask-gate 的「續上次」清單(v3.0 C 件);最近活動在前
         rows = [_dec_row(self._env, dict(s), ENCRYPTED_SESSION_FIELDS)
                 for s in self._sessions.values()
                 if s["child_id"] == child_id and s["status"] == "open"]
@@ -354,7 +354,7 @@ class MemoryDatabase:
 
     async def expire_stale_sessions(self, cutoff: _dt.datetime) -> int:
         # 棄案 TTL 錨定「最後活動」:近期有輪或近期被 touch(resume / ②③④,
-        # v3.2 C 件 updated_at)→ 不棄;乒乓本就跨日。
+        # v3.0 C 件 updated_at)→ 不棄;乒乓本就跨日。
         async with self._lock:
             n = 0
             for sid, s in self._sessions.items():
@@ -481,7 +481,7 @@ class PgDatabase:
         async with self._pool.connection() as conn:
             await conn.execute(DDL)
             await conn.execute(DDL_MIGRATE)       # 既有 v2.2 庫直接開機也補齊 v3.0 欄位
-            await conn.execute(DDL_MIGRATE_0004)  # 既有 v3.0 庫補齊 v3.2 欄位(冪等)
+            await conn.execute(DDL_MIGRATE_0004)  # 既有 v3.0 庫補齊 v3.0 欄位(冪等)
             await conn.execute(DDL_MIGRATE_0006)  # events.session_id 放寬可空(冪等)
             await conn.execute(DDL_MIGRATE_0008)  # sessions.caregiver(冪等)
 

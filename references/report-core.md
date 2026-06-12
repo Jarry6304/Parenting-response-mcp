@@ -1,13 +1,13 @@
 ---
 spec: parenting-response / report-core
-version: 3.2
+version: 3.0
 status: LOCKED
 date: 2026-06-12
-implements: parenting-response-mcp-spec-v3.2.md(F 件 report 體系 + H 件語意紅線三層)
+implements: parenting-response-mcp-spec-v3.0.md(F 件 report 體系 + H 件語意紅線三層)
 consumers: report_core 載入器, orchestrator.report(phase1 骨架/guardian、phase2 驗證組裝)
 ---
 
-# report-core(v3.2)— 三種報告的骨架、槽位與紅線
+# report-core(v3.0)— 三種報告的骨架、槽位與紅線
 
 > 報告 = **code 聚合(fixed)+ host 敘事(slot)** 的確定性組裝。fixed 節由
 > server 以聚合值組裝,host 不可交;slot 節由 host 依 guardian 指令生成、

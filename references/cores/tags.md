@@ -1,13 +1,13 @@
 ---
 spec: parenting-response / cores-tags
-version: 3.2
+version: 3.0
 status: LOCKED
 date: 2026-06-12
-implements: parenting-response-mcp-spec-v3.2.md（G 件 safety 分齡;v3.0 學派 TAG 設計不變）
+implements: parenting-response-mcp-spec-v3.0.md（G 件 safety 分齡;v3.0 學派 TAG 設計不變）
 consumers: cores 載入器, ③ core_tags(6 回應核心 / safety_mode 安全約束集), ① constraints(2 探詢核心探點 + 8 校紅線聯集)
 ---
 
-# cores(v3.2)— 6 回應核心 + 2 探詢核心 + safety 安全約束集
+# cores(v3.0)— 6 回應核心 + 2 探詢核心 + safety 安全約束集
 
 > 學派分兩功能群:**回應核心(6)** 產 posture TAG,③ 回傳給 host 耦合;**探詢核心(2:maslow, satir)** 產診斷探點,① 約束探詢回傳,引導 S1 理解情境,**不進回應耦合**。本檔為單一事實來源。
 
@@ -121,7 +121,7 @@ satir:
 
 ---
 
-## 覆盤視角(v3.2 B 件;retro mode ③ 回傳,僅 6 回應核心)
+## 覆盤視角(v3.0 B 件;retro mode ③ 回傳,僅 6 回應核心)
 
 > retro = 事後覆盤:家長交代「當時實際怎麼處理」(`parent_action`),③ 回六校
 > **覆盤鏡頭**——各校用自身理論回看那次處理,給「回看點 → 改寫操作 → 示範」。
@@ -184,7 +184,7 @@ nvc.覆盤:
 
 ---
 
-## safety 安全約束集(v3.2 G 件;③ safety_mode 組卡素材)
+## safety 安全約束集(v3.0 G 件;③ safety_mode 組卡素材)
 
 > 結構:**3 風險向底座**(child / parent / third,內容本質不同)× **4 年齡 delta**(只調語域與姿態,僅疊加於 child 向——parent/third 的內容對象非孩子)。風險向由 G0 命中組自然攜帶(`wordlists.G0_SHORTCIRCUIT_BY_VECTOR`),server 不另判斷。7 塊全顯式、缺一 fail-fast;delta 可標「無補充」但塊必須存在。每塊 `source` 錨定已出版準則——改寫幅度限於語域調整,不自創方法。
 

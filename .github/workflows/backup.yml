@@ -1,6 +1,6 @@
-# 週備份(v3.2 J 件):Neon pg_dump → zstd → age 公鑰加密 → 推私有 backup repo。
+# 週備份(v3.0 J 件):Neon pg_dump → zstd → age 公鑰加密 → 推私有 backup repo。
 #
-# 需要的 repo secrets(設定步驟見 docs/deploy-runbook-v3.2.md):
+# 需要的 repo secrets(設定步驟見 docs/deploy-runbook.md):
 #   NEON_DATABASE_URL  Neon 連線字串(pg_dump 用;唯讀角色即可)
 #   AGE_PUBLIC_KEY     age 收件公鑰(age1…;私鑰**不進**任何雲端,離線保存)
 #   BACKUP_REPO        備份目的私有 repo(owner/name,例 jarry6304/parenting-backup)

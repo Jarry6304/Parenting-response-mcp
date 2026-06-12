@@ -24,7 +24,7 @@ async def finalize_clean(client: Client, sid: str, **over: Any) -> dict[str, Any
 
 
 async def test_record_fields_v3(client: Client, db: MemoryDatabase) -> None:
-    """records schema_version=3(v3.2):新欄落地、無源欄恆 NULL、maslow_need 固定排序。"""
+    """records schema_version=3(v3.0):新欄落地、無源欄恆 NULL、maslow_need 固定排序。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
     r = await finalize_clean(client, sid, maslow_need=["尊重", "安全"], outcome_note="有效")
@@ -41,7 +41,7 @@ async def test_record_fields_v3(client: Client, db: MemoryDatabase) -> None:
     # v3 無判讀來源欄恆 NULL(record-schema v3)
     assert rec["dreikurs_purpose"] is None and rec["posture"] is None
     assert rec["dev_normative"] is None and rec["tools_used"] is None
-    # v3.2 新欄:乾淨案 redflag=false;非 retro 案 parent_action=NULL
+    # v3.0 新欄:乾淨案 redflag=false;非 retro 案 parent_action=NULL
     assert rec["redflag"] is False and rec["parent_action"] is None
 
 
@@ -88,7 +88,7 @@ async def test_promotion_chain_done_from_plan(client: Client, db: MemoryDatabase
 
 
 async def test_redflag_record_excluded_from_promotion(client: Client, db: MemoryDatabase) -> None:
-    """#1+v3.2:rehearsal 紅旗案 → record.redflag=true(status=planned 照常),
+    """#1+v3.0:rehearsal 紅旗案 → record.redflag=true(status=planned 照常),
     ① 引用一律 E_INVALID_LINK——排除錨 = redflag 旗標,非終態。"""
     sid = await open_session(client, mode="rehearsal")
     await client.call_tool("prerequisites", prereq_args(sid))

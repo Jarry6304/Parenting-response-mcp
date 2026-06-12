@@ -1,4 +1,4 @@
-"""v3.2 E 件:⑤ 原始逐字稿歸檔——防滲拒收、chunk 冪等、G0 補檢(parent only)、
+"""v3.0 E 件:⑤ 原始逐字稿歸檔——防滲拒收、chunk 冪等、G0 補檢(parent only)、
 收尾鏈 next 指引。"""
 
 from __future__ import annotations

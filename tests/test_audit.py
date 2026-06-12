@@ -25,7 +25,7 @@ async def test_g0_at_constraints_logs_evidence(client: Client, db: MemoryDatabas
 async def test_g0_recheck_event_carries_round_and_field(
     client: Client, db: MemoryDatabase
 ) -> None:
-    """③ 複檢命中:event 帶 round_no 與欄位(v3.2 訊號化:不再自動產 record,
+    """③ 複檢命中:event 帶 round_no 與欄位(v3.0 訊號化:不再自動產 record,
     證據鏈唯一落點 = events)。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
@@ -51,7 +51,7 @@ async def test_finalize_g0_contact_traceable_without_stopping(
         "session_id": sid, "outcome": "partial",
         "draft": "我看到你很生氣,我們先深呼吸。",
         "parent_self_note": "我快忍不住打他了,怕自己傷害孩子",
-        "referral_ack": True,  # v3.2:轉介送達確認
+        "referral_ack": True,  # v3.0:轉介送達確認
     }))
     assert "record_id" in r  # 案照收
     evs = [e for e in await db.get_events(sid) if e["kind"] == "g0_shortcircuit"]

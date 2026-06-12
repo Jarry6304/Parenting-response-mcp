@@ -1,4 +1,4 @@
-"""v3.2 F 件(report 兩段式)+ H 件(語意紅線三層)驗收。
+"""v3.0 F 件(report 兩段式)+ H 件(語意紅線三層)驗收。
 
 phase1 = 聚合+骨架+guardian(零 LLM 聚合);phase2 = 五道驗證 → 確定性組裝
 → 落庫 version+1。語意警示:tripwire 不拒收 → 稽核 → 下季回放。

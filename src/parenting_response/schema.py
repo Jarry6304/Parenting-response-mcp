@@ -33,8 +33,8 @@ class PRError(Exception):
 # ── 受控詞表(record-schema.md 鎖定值域) ──────────────────────────
 
 Mode = Literal["live", "rehearsal"]
-MODES: tuple[str, ...] = ("live", "rehearsal", "retro")  # retro = 事後覆盤(v3.2 B 件)
-CAREGIVERS: tuple[str, ...] = ("爸", "媽")  # v3.2 K 件:caregiver 受控詞(由 sub 映射,不收輸入)
+MODES: tuple[str, ...] = ("live", "rehearsal", "retro")  # retro = 事後覆盤(v3.0 B 件)
+CAREGIVERS: tuple[str, ...] = ("爸", "媽")  # v3.0 K 件:caregiver 受控詞(由 sub 映射,不收輸入)
 
 AgeBand = Literal["2-3", "4-6", "7-11", "12+"]  # 0-2 刻意範圍外(C3)
 AGE_BANDS: tuple[str, ...] = ("2-3", "4-6", "7-11", "12+")
@@ -45,12 +45,12 @@ INTENSITIES: tuple[str, ...] = ("低", "中", "高")
 Severity = Literal["低", "中", "高"]
 SEVERITY_ORDER: dict[str, int] = {"低": 0, "中": 1, "高": 2}
 
-# v3.2 A 件:終態 = finalized / expired;redflag_stopped 僅 legacy 列保留(查詢視同 closed),
+# v3.0 A 件:終態 = finalized / expired;redflag_stopped 僅 legacy 列保留(查詢視同 closed),
 # 新寫入路徑不再產生——G0 由閘降為訊號(sessions.redflag_active)。
 SessionStatus = Literal["open", "finalized", "expired", "redflag_stopped"]
-# FSM stage(spec v3.2):① constrained → ② {ready|short_pending} → 終態(expired 僅由 TTL 清掃產生)
+# FSM stage(spec v3.0):① constrained → ② {ready|short_pending} → 終態(expired 僅由 TTL 清掃產生)
 SessionStage = Literal["constrained", "ready", "short_pending", "finalized", "expired", "redflag_stopped"]
-RecordStatus = Literal["planned", "done", "done_from_plan", "stopped"]  # stopped = legacy 紅旗案;v3.2 排除鏈改錨 record.redflag
+RecordStatus = Literal["planned", "done", "done_from_plan", "stopped"]  # stopped = legacy 紅旗案;v3.0 排除鏈改錨 record.redflag
 
 ChildReaction = Literal["鬆動配合", "否認堅持", "情緒爆發", "退縮害怕", "反問試探", "轉移打岔"]
 CHILD_REACTIONS: tuple[str, ...] = ("鬆動配合", "否認堅持", "情緒爆發", "退縮害怕", "反問試探", "轉移打岔")
@@ -95,5 +95,5 @@ class Redflag(BaseModel):
     field: str | None = None
     phrase: str | None = None
     excerpt: str | None = None
-    # v3.2 G 件:命中組攜帶的風險向(child|parent|third)→ ③ safety_mode 組卡
+    # v3.0 G 件:命中組攜帶的風險向(child|parent|third)→ ③ safety_mode 組卡
     vector: str | None = None

@@ -1,4 +1,4 @@
-"""v3.2 K 件:多照顧者——caregiver 由已驗 sub 映射(不收輸入)、local 預設爸、
+"""v3.0 K 件:多照顧者——caregiver 由已驗 sub 映射(不收輸入)、local 預設爸、
 未映射 fail-fast、報告自照計數、比較句 tripwire。"""
 
 from __future__ import annotations

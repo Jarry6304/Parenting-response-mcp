@@ -1,4 +1,4 @@
-# 部署手冊 v3.2 — WorkOS AuthKit + Cloud Run + Neon(零成本基線)
+# 部署手冊 v3.0 — WorkOS AuthKit + Cloud Run + Neon(零成本基線)
 
 > 對象:本人(+太太一個帳號)。所有雲端操作不在 code 內,照本檔手動執行;
 > code 端只認 env。**金鑰原則:ENVELOPE 私鑰與 age 私鑰永不進雲端控制台以外的地方,
@@ -68,9 +68,9 @@ printf '%s' "$ENVELOPE_KEYS"  | gcloud secrets create envelope-keys  --data-file
 
 ```bash
 gcloud artifacts repositories create prmcp --repository-format=docker --location=us-west1
-gcloud builds submit --tag us-west1-docker.pkg.dev/$PROJECT/prmcp/server:v3.2
+gcloud builds submit --tag us-west1-docker.pkg.dev/$PROJECT/prmcp/server:v3.0
 gcloud run deploy parenting-response \
-  --image us-west1-docker.pkg.dev/$PROJECT/prmcp/server:v3.2 \
+  --image us-west1-docker.pkg.dev/$PROJECT/prmcp/server:v3.0 \
   --region us-west1 --min-instances 0 --max-instances 1 \
   --memory 512Mi --allow-unauthenticated \
   --set-secrets "DATABASE_URL=database-url:latest,ENVELOPE_KEYS=envelope-keys:latest" \

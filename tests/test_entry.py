@@ -1,4 +1,4 @@
-"""v3.2 C 件:入口分流 ask-gate + resume(+ D 件收束 ask-gate / round 軟上限)。"""
+"""v3.0 C 件:入口分流 ask-gate + resume(+ D 件收束 ask-gate / round 軟上限)。"""
 
 from __future__ import annotations
 

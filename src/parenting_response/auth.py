@@ -1,4 +1,4 @@
-"""驗證閘(v3.2 I 件):AuthKit OAuth(WorkOS)+ sub allowlist。
+"""驗證閘(v3.0 I 件):AuthKit OAuth(WorkOS)+ sub allowlist。
 
 零密碼自管:JWT 驗章/效期/audience 由 fastmcp AuthKitProvider(JWKS)承載;
 本模組只加一層 **sub allowlist**——AuthKit 帳號 ≠ 本系統使用者,

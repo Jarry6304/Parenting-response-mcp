@@ -1,4 +1,4 @@
-"""自由文本就地信封加密(spec v3.2 J 件)。
+"""自由文本就地信封加密(spec v3.0 J 件)。
 
 既有明文列逐欄加密(AES-256-GCM,`enc:<key_id>:…` 格式);**需設
 ENVELOPE_KEYS / ENVELOPE_ACTIVE_KEY_ID**,未設即 raise(半加密庫比明文庫
