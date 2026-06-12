@@ -125,7 +125,7 @@ v3.0 零 LLM:server 不再產生 per-situation 判讀,records 欄位來源全面
 低: 其餘
 ```
 
-**is_positive_log** := `(problem_category = 正向紀錄)`。正向紀錄 session 仍走完整管線(卡 = 強化建議);是否值得短管線 → 待議。
+**is_positive_log** := `(problem_category = 正向紀錄)`。短管線一問已於 v3.0 定案(② `script_decision` 硬閘,skip → short ④;見「schema_version 2」節),本段其餘為 v1 歷史規則。
 
 **goal_aligned** — finalize 時判:
 
