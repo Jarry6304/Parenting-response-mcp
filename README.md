@@ -62,7 +62,7 @@ Claude custom connector:URL 填 `https://<host>/mcp`,AuthKit 登入(DCR)。
 
 | 要查 | 看 |
 |---|---|
-| 總規格(LOCKED):FSM、tool 契約、安全邊界、驗收 | `parenting-response-mcp-spec-v3.0.md`(2026-06 G0 訊號化 A–K 已實作;條目由規格持有者 amend 寫回) |
+| 總規格(LOCKED):FSM、tool 契約、安全邊界、驗收 | `parenting-response-mcp-spec-v3.0.md`(含 2026-06 Amendment A–K;衝突處以 Amendment 節為準) |
 | 學派 TAG(6 回應+2 探詢+覆盤 6+safety 7;runtime 即讀) | `references/cores/tags.md` |
 | 報告骨架/槽位/guardian/驗證參數 | `references/report-core.md` |
 | L0 欄位語意、受控詞表、schema_version 分流、events 契約 | `references/record-schema.md` |
