@@ -19,6 +19,7 @@ import uuid
 from typing import Any
 
 from . import report, report_core
+from .auth import current_sub
 from .cores import inquiry_probes, red_line_union, response_tags, review_tags, safety_cards
 from .db import Database, UniqueViolation, dump_json
 from .redflag import check_shortcircuit, check_warning
@@ -77,6 +78,14 @@ class Orchestrator:
         self.db = db
         self.session_ttl_days = session_ttl_days  # ≤0 = 停用棄案清掃
         # 注意:無 self.llm —— v3 零推論,刻意不收 LLM client
+
+    async def _log_event(self, session_id: str | None, kind: str,
+                         payload: dict[str, Any]) -> None:
+        """events 統一落點(v3.2 I 件):authkit 模式自動附已驗 sub(誰觸發的)。"""
+        sub = current_sub()
+        if sub is not None:
+            payload = {**payload, "sub": sub}
+        await self.db.log_event(session_id, kind, payload)
 
     # ── ① constraints(約束探詢,內含 G0) ─────────────────────────
 
@@ -422,7 +431,7 @@ class Orchestrator:
             violations = self._pattern_check(draft)  # 禁用詞 code 後檢
             if violations:
                 # 拒收稽核(defect-fixes #7):重試軌跡可考——host 踩了哪些詞、是否屢試
-                await self.db.log_event(session_id, "finalize_rejected", {
+                await self._log_event(session_id, "finalize_rejected", {
                     "violations": violations, "outcome": outcome,
                     "redflag_hit": rf is not None,
                 })
@@ -480,7 +489,7 @@ class Orchestrator:
             if found:
                 markup_hits.append({"turn": i, "patterns": found})
         if markup_hits:  # 整 chunk 拒收:逐字稿純度優先,部分落庫會造成靜默缺漏
-            await self.db.log_event(session_id, "archive_rejected", {
+            await self._log_event(session_id, "archive_rejected", {
                 "source": "⑤", "chunk_no": chunk_no, "hits": markup_hits,
             })
             return {"rejected": True, "violations": markup_hits,
@@ -666,7 +675,7 @@ class Orchestrator:
                 if leak is not None:
                     violations.append({"slot": sid, "kind": "raw_text_leak", "term": leak})
         if violations:
-            await self.db.log_event(None, "report_rejected", {
+            await self._log_event(None, "report_rejected", {
                 "scope": scope, "ref_key": ref, "violations": violations})
             return {"rejected": True, "violations": violations,
                     "hint": "slot 未過驗證,請依 violations 修正後重交(不落庫)"}
@@ -677,7 +686,7 @@ class Orchestrator:
             for w in semantic_warnings(text):
                 warnings.append({**w, "slot": sid})
         if warnings:
-            await self.db.log_event(None, "report_semantic_warning", {
+            await self._log_event(None, "report_semantic_warning", {
                 "scope": scope, "ref_key": ref, "warnings": warnings})
 
         contents = self._fixed_contents(scope, ref, ctx)
@@ -686,7 +695,7 @@ class Orchestrator:
         row = await self.db.insert_report(
             scope, ref, body=body,
             meta_json=report.meta_json(ctx["aggregates"], slots, warnings))
-        await self.db.log_event(None, "report_audit", {
+        await self._log_event(None, "report_audit", {
             "scope": scope, "ref_key": ref, "version": row["version"],
             "semantic_warning_count": len(warnings)})
         result: dict[str, Any] = {
@@ -726,13 +735,13 @@ class Orchestrator:
         if round_no is not None:
             base["round_no"] = round_no
         if rf is not None:
-            await self.db.log_event(session_id, "g0_shortcircuit", {
+            await self._log_event(session_id, "g0_shortcircuit", {
                 **base, "field": rf.field, "phrase": rf.phrase, "excerpt": rf.excerpt,
                 "vector": rf.vector,         # 風險向(v3.2 G 件:組卡緣由可重建)
                 "referral_delivered": True,  # 命中路徑回傳必含 referral(by construction)
             })
         if warnings:
-            await self.db.log_event(session_id, "g0_warning", {
+            await self._log_event(session_id, "g0_warning", {
                 **base, "hits": [{"field": f, "phrase": p} for f, p in warnings],
             })
 

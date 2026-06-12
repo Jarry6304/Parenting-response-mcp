@@ -1,22 +1,23 @@
-"""FastMCP server (v3.0):對 host 只暴露 4 個編排入口。
+"""FastMCP server (v3.2):對 host 暴露 6 個編排入口(①-⑤ + report)。
 
-v3.0 = thin server:**零 LLM 呼叫、零 ANTHROPIC_API_KEY**。
-所有「不得違反」由 orchestrator 以 code 斷言(FSM 守衛、G0、後檢);
-host(Claude)負責 S1 探詢、6 回應核心 TAG 的耦合生成、對 user 講話。
+thin server:**零 LLM 呼叫、零 ANTHROPIC_API_KEY**。
+所有「不得違反」由 orchestrator 以 code 斷言(FSM 守衛、G0 訊號、後檢);
+host(Claude)負責 S1 探詢、TAG 耦合生成、slot 敘事、對 user 講話。
 
-對外傳輸:streamable-HTTP(custom connector 用)。bearer 閘見 main()。
+對外傳輸:streamable-HTTP(custom connector 用)。
+驗證:AUTH_MODE=local(預設,只准 loopback)| authkit(OAuth,見 auth.py)。
 """
 
 from __future__ import annotations
 
 import os
-import sys
 from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
-from fastmcp.server.auth import AuthProvider, StaticTokenVerifier
+from fastmcp.server.auth import AuthProvider
 
+from .auth import build_auth, validate_binding
 from .orchestrator import Orchestrator
 from .schema import PRError
 
@@ -180,30 +181,37 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
 
 
 def main() -> None:
-    """進入點:thin server,**無 LLM client**。只需 DATABASE_URL。
+    """進入點:thin server,**無 LLM client**。只需 DATABASE_URL(+authkit 三要素)。
 
     傳輸 = streamable-HTTP(custom connector 用)。
-    MCP_BEARER_TOKEN 設了則啟用 bearer 閘(靜態 token 驗證)。
+    AUTH_MODE=local(預設):無閘,**非 loopback 一律拒啟動**(fail-fast);
+    AUTH_MODE=authkit:WorkOS AuthKit OAuth + ALLOWED_SUBJECTS allowlist
+    (v3.2 I 件;v3.0 的靜態 bearer 閘已退役)。
     """
     import asyncio
 
     from .db import PgDatabase
 
     dsn = os.environ["DATABASE_URL"]
-    # secure-by-default:預設只綁 loopback;對外暴露須顯式 HOST=…(records 含兒少個資)
+    # secure-by-default:預設只綁 loopback;對外(Cloud Run)= authkit 模式 + HOST=0.0.0.0
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
-    token = os.environ.get("MCP_BEARER_TOKEN")
+    mode = os.environ.get("AUTH_MODE", "local")
     ttl_days = int(os.environ.get("SESSION_TTL_DAYS", "30"))  # ≤0 = 停用棄案清掃
-    auth = StaticTokenVerifier(tokens={token: {"client_id": "mcp-host"}}) if token else None
-    if auth is None and host not in ("127.0.0.1", "localhost", "::1"):
-        print("警告:HOST 綁非 loopback 且未設 MCP_BEARER_TOKEN——同網段任何人可讀寫"
-              "兒少個資紀錄;對外暴露前請設 token 或以反向代理加閘。", file=sys.stderr)
+    validate_binding(mode, host)  # local + 非 loopback → 拒啟動(個資面)
 
     async def _run() -> None:
         db = PgDatabase(dsn)
         await db.open()
         await db.ensure_schema()
+        auth = build_auth(
+            mode=mode,
+            authkit_domain=os.environ.get("AUTHKIT_DOMAIN"),
+            base_url=os.environ.get("BASE_URL"),
+            allowed_subjects=[s.strip() for s in
+                              os.environ.get("ALLOWED_SUBJECTS", "").split(",") if s.strip()],
+            db=db,
+        )
         orch = Orchestrator(db, session_ttl_days=ttl_days)  # 注意:不傳 llm —— v3 零推論
         server = build_server(orch, auth=auth)
         await server.run_async(transport="streamable-http", host=host, port=port)
