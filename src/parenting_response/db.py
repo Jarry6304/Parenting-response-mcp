@@ -30,6 +30,8 @@ SESSION_COLUMNS: tuple[str, ...] = (
     "session_id", "child_id", "mode", "status", "stage", "age_band", "facts", "emotion",
     "emotion_intensity", "safety_flag", "severity", "is_positive_log",
     "problem_category", "confounders", "parent_goal", "goal_aligned", "linked_plan_id",
+    # v3.2:A 件 G0 訊號(旗標+風險向)/ B 件 retro 暫存 / C 件 TTL 續期錨
+    "redflag_active", "redflag_vector", "parent_action", "updated_at",
 )
 
 RECORD_COLUMNS: tuple[str, ...] = (
@@ -37,6 +39,8 @@ RECORD_COLUMNS: tuple[str, ...] = (
     "dreikurs_purpose", "maslow_need", "erikson_stage", "piaget_stage", "dev_normative",
     "claimed_sources", "draft",
     "outcome", "outcome_note", "parent_self_note", "followup", "tools_used", "posture",
+    # v3.2(schema_version=3):A 件 promotion 排除錨 / B 件 retro 當時實際處理
+    "redflag", "parent_action",
 )
 
 # 稽核事件(append-only;defect-fixes #7/#8):G0 命中(兩級)與 ④ pattern 拒收
@@ -60,6 +64,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     status            TEXT NOT NULL,
     stage             TEXT,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     age_band          TEXT,
     facts             TEXT NOT NULL,
     emotion           TEXT NOT NULL,
@@ -71,7 +76,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     confounders       JSONB,
     parent_goal       TEXT,
     goal_aligned      BOOLEAN,
-    linked_plan_id    TEXT
+    linked_plan_id    TEXT,
+    redflag_active    BOOLEAN NOT NULL DEFAULT false,
+    redflag_vector    TEXT,
+    parent_action     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS rounds (
@@ -90,7 +98,7 @@ CREATE TABLE IF NOT EXISTS rounds (
 CREATE TABLE IF NOT EXISTS records (
     record_id        TEXT PRIMARY KEY,
     session_id       TEXT UNIQUE REFERENCES sessions(session_id),
-    schema_version   INT NOT NULL DEFAULT 2,
+    schema_version   INT NOT NULL DEFAULT 3,
     status           TEXT NOT NULL,
     linked_plan_id   TEXT,
     dreikurs_purpose TEXT,
@@ -106,7 +114,9 @@ CREATE TABLE IF NOT EXISTS records (
     followup         TEXT,
     tools_used       JSONB,
     posture          TEXT,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    redflag          BOOLEAN NOT NULL DEFAULT false,
+    parent_action    TEXT
 );
 """ + DDL_EVENTS
 
@@ -119,15 +129,32 @@ ALTER TABLE sessions ALTER COLUMN emotion_intensity DROP NOT NULL;
 ALTER TABLE rounds ALTER COLUMN card DROP NOT NULL;
 ALTER TABLE records ADD COLUMN IF NOT EXISTS claimed_sources JSONB;
 ALTER TABLE records ADD COLUMN IF NOT EXISTS draft TEXT;
-ALTER TABLE records ALTER COLUMN schema_version SET DEFAULT 2;
 UPDATE sessions SET stage = CASE status WHEN 'open' THEN 'ready' ELSE status END
 WHERE stage IS NULL;
+"""
+
+# v3.0 → v3.2 升級(冪等;migration 0004 與 ensure_schema 共用,單一來源):
+# A 件 G0 訊號欄 + B 件 parent_action + C 件 updated_at(回填=created_at,TTL 續期錨);
+# records schema_version 2→3(record-schema.md 版本管理)。
+# legacy redflag_stopped 列不回填——歷史終態,查詢視同 closed。
+DDL_MIGRATE_0004 = """
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS redflag_active BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS redflag_vector TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS parent_action TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+UPDATE sessions SET updated_at = created_at WHERE updated_at IS NULL;
+ALTER TABLE sessions ALTER COLUMN updated_at SET DEFAULT now();
+ALTER TABLE sessions ALTER COLUMN updated_at SET NOT NULL;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS redflag BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS parent_action TEXT;
+ALTER TABLE records ALTER COLUMN schema_version SET DEFAULT 3;
 """
 
 
 class Database(Protocol):
     async def create_session(self, row: dict[str, Any]) -> None: ...
     async def get_session(self, session_id: str) -> dict[str, Any] | None: ...
+    async def list_open_sessions(self, child_id: str) -> list[dict[str, Any]]: ...
     async def update_session(self, session_id: str, fields: dict[str, Any]) -> None: ...
     async def insert_round(
         self, session_id: str, *, child_reaction: str | None, reaction_note: str | None,
@@ -164,7 +191,9 @@ class MemoryDatabase:
             if sid in self._sessions:
                 raise UniqueViolation(f"session {sid} 已存在")
             stored = dict(row)
-            stored.setdefault("created_at", _dt.datetime.now(_dt.timezone.utc))  # PG: DEFAULT now()
+            now = _dt.datetime.now(_dt.timezone.utc)
+            stored.setdefault("created_at", now)  # PG: DEFAULT now()
+            stored.setdefault("updated_at", now)  # PG: DEFAULT now()(C 件 TTL 續期錨)
             self._sessions[sid] = stored
             self._rounds[sid] = []
 
@@ -172,9 +201,19 @@ class MemoryDatabase:
         row = self._sessions.get(session_id)
         return dict(row) if row else None
 
+    async def list_open_sessions(self, child_id: str) -> list[dict[str, Any]]:
+        # 入口 ask-gate 的「續上次」清單(v3.2 C 件);最近活動在前
+        rows = [dict(s) for s in self._sessions.values()
+                if s["child_id"] == child_id and s["status"] == "open"]
+        rows.sort(key=lambda r: r.get("updated_at") or r["created_at"], reverse=True)
+        return rows
+
     async def update_session(self, session_id: str, fields: dict[str, Any]) -> None:
         async with self._lock:
             safe = {k: v for k, v in fields.items() if k in SESSION_COLUMNS and k != "session_id"}
+            if not safe:
+                return
+            safe.setdefault("updated_at", _dt.datetime.now(_dt.timezone.utc))  # 活動即續期
             self._sessions[session_id].update(safe)  # 與 PgDatabase 同白名單語意
 
     async def insert_round(
@@ -209,11 +248,14 @@ class MemoryDatabase:
         return sum(1 for rid in self._records if rid.startswith(prefix))
 
     async def expire_stale_sessions(self, cutoff: _dt.datetime) -> int:
-        # 棄案 TTL 錨定「最後活動」:建案久遠但近期仍有輪 → 不棄(乒乓本就跨日)
+        # 棄案 TTL 錨定「最後活動」:近期有輪或近期被 touch(resume / ②③④,
+        # v3.2 C 件 updated_at)→ 不棄;乒乓本就跨日。
         async with self._lock:
             n = 0
             for sid, s in self._sessions.items():
                 if s["status"] != "open" or s["created_at"] >= cutoff:
+                    continue
+                if (s.get("updated_at") or s["created_at"]) >= cutoff:
                     continue
                 if any(r["created_at"] >= cutoff for r in self._rounds.get(sid, [])):
                     continue
@@ -270,7 +312,8 @@ class PgDatabase:
     async def ensure_schema(self) -> None:
         async with self._pool.connection() as conn:
             await conn.execute(DDL)
-            await conn.execute(DDL_MIGRATE)  # 既有 v2.2 庫直接開機也補齊 v3 欄位
+            await conn.execute(DDL_MIGRATE)       # 既有 v2.2 庫直接開機也補齊 v3.0 欄位
+            await conn.execute(DDL_MIGRATE_0004)  # 既有 v3.0 庫補齊 v3.2 欄位(冪等)
 
     @staticmethod
     def _jsonb(value: Any) -> Any:
@@ -295,12 +338,24 @@ class PgDatabase:
             cur = await conn.execute("SELECT * FROM sessions WHERE session_id = %s", (session_id,))
             return await self._fetchone_dict(cur)
 
+    async def list_open_sessions(self, child_id: str) -> list[dict[str, Any]]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM sessions WHERE child_id = %s AND status = 'open'
+                ORDER BY COALESCE(updated_at, created_at) DESC
+                """,
+                (child_id,),
+            )
+            return await self._fetchall_dicts(cur)
+
     async def update_session(self, session_id: str, fields: dict[str, Any]) -> None:
         from psycopg import sql
 
         safe = {k: v for k, v in fields.items() if k in SESSION_COLUMNS and k != "session_id"}
         if not safe:
             return
+        safe.setdefault("updated_at", _dt.datetime.now(_dt.timezone.utc))  # 活動即續期
         stmt = sql.SQL("UPDATE sessions SET {sets} WHERE session_id = {ph}").format(
             sets=sql.SQL(", ").join(
                 sql.SQL("{} = {}").format(sql.Identifier(k), sql.Placeholder()) for k in safe
@@ -363,10 +418,11 @@ class PgDatabase:
                 """
                 UPDATE sessions s SET status = 'expired', stage = 'expired'
                 WHERE s.status = 'open' AND s.created_at < %s
+                  AND COALESCE(s.updated_at, s.created_at) < %s
                   AND NOT EXISTS (SELECT 1 FROM rounds r
                                   WHERE r.session_id = s.session_id AND r.created_at >= %s)
                 """,
-                (cutoff, cutoff),
+                (cutoff, cutoff, cutoff),
             )
             return cur.rowcount
 

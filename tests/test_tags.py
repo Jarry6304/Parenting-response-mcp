@@ -8,6 +8,8 @@ from conftest import constraints_args, data_of, ready_session
 from parenting_response.cores import (
     INQUIRY_TAG_KEYS,
     RESPONSE_TAG_KEYS,
+    REVIEW_TAG_KEYS,
+    SAFETY_BLOCKS,
     load_tags,
     red_line_union,
 )
@@ -33,15 +35,21 @@ EXPECTED_STAGES: dict[str, tuple[str, str]] = {
 
 
 def test_tags_loader_completeness() -> None:
-    """tags.md 載入:8 校齊、欄位齊、值非空(fail-fast 驗證)。"""
+    """tags.md 載入:8 校齊、欄位齊、值非空;v3.2 加 safety 7 塊 + 覆盤 6 塊(fail-fast)。"""
     tags = load_tags()
-    assert set(tags) == set(RESPONSE_CORES) | set(INQUIRY_CORES)
+    review_blocks = {f"{s}.覆盤" for s in RESPONSE_CORES}
+    assert set(tags) == (set(RESPONSE_CORES) | set(INQUIRY_CORES)
+                         | set(SAFETY_BLOCKS) | review_blocks)
     for school in RESPONSE_CORES:
         for key in RESPONSE_TAG_KEYS:
             assert tags[school][key], f"{school}.{key} 空"
+        for key in REVIEW_TAG_KEYS:
+            assert tags[f"{school}.覆盤"][key], f"{school}.覆盤.{key} 空"
     for school in INQUIRY_CORES:
         for key in INQUIRY_TAG_KEYS:
             assert tags[school][key], f"{school}.{key} 空"
+    for block in SAFETY_BLOCKS:
+        assert tags[block]["source"], f"{block}.source 空"
 
 
 def test_red_line_union_covers_8_schools() -> None:

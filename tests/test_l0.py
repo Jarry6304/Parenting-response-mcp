@@ -24,13 +24,13 @@ async def finalize_clean(client: Client, sid: str, **over: Any) -> dict[str, Any
 
 
 async def test_record_fields_v3(client: Client, db: MemoryDatabase) -> None:
-    """records schema_version=2:新欄落地、無源欄恆 NULL、maslow_need 固定排序。"""
+    """records schema_version=3(v3.2):新欄落地、無源欄恆 NULL、maslow_need 固定排序。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
     r = await finalize_clean(client, sid, maslow_need=["尊重", "安全"], outcome_note="有效")
     rec = await db.get_record(r["record_id"])
     assert rec is not None
-    assert rec["schema_version"] == 2
+    assert rec["schema_version"] == 3
     assert rec["status"] == "done"
     assert rec["session_id"] == sid
     assert rec["draft"] == "我看到你很努力,我們一起想辦法。"
@@ -38,9 +38,11 @@ async def test_record_fields_v3(client: Client, db: MemoryDatabase) -> None:
     assert rec["maslow_need"] == ["安全", "尊重"]  # MASLOW_ORDER 固定排序
     assert rec["erikson_stage"] == "主動對罪惡感" and rec["piaget_stage"] == "前運思期"
     assert rec["outcome"] == "resolved" and rec["outcome_note"] == "有效"
-    # v3 無判讀來源欄恆 NULL(record-schema v2)
+    # v3 無判讀來源欄恆 NULL(record-schema v3)
     assert rec["dreikurs_purpose"] is None and rec["posture"] is None
     assert rec["dev_normative"] is None and rec["tools_used"] is None
+    # v3.2 新欄:乾淨案 redflag=false;非 retro 案 parent_action=NULL
+    assert rec["redflag"] is False and rec["parent_action"] is None
 
 
 def test_record_id_anchors_taipei_day() -> None:
@@ -86,16 +88,20 @@ async def test_promotion_chain_done_from_plan(client: Client, db: MemoryDatabase
 
 
 async def test_redflag_record_excluded_from_promotion(client: Client, db: MemoryDatabase) -> None:
-    """#1:rehearsal 紅旗自動收案 → record.status=stopped,① 引用一律 E_INVALID_LINK。"""
+    """#1+v3.2:rehearsal 紅旗案 → record.redflag=true(status=planned 照常),
+    ① 引用一律 E_INVALID_LINK——排除錨 = redflag 旗標,非終態。"""
     sid = await open_session(client, mode="rehearsal")
     await client.call_tool("prerequisites", prereq_args(sid))
     await client.call_tool("core_tags", {"session_id": sid})
     r = data_of(await client.call_tool("core_tags", {
         "session_id": sid, "child_reaction": "情緒爆發", "reaction_note": "他撞牆說想消失"}))
     assert r["redflag"]["hit"] is True
-    rec = await db.get_record_by_session(sid)
+    r2 = data_of(await client.call_tool("finalize", {
+        "session_id": sid, "outcome": "partial", "draft": "我先陪著你,我在這裡。",
+        "referral_ack": True}))
+    rec = await db.get_record(r2["record_id"])
     assert rec is not None
-    assert rec["status"] == "stopped" and rec["outcome"] == "escalated_to_redflag"
+    assert rec["status"] == "planned" and rec["redflag"] is True
     with pytest.raises(ToolError, match="E_INVALID_LINK"):
         await client.call_tool("constraints", constraints_args(linked_plan_id=rec["record_id"]))
 

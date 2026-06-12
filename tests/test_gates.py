@@ -10,25 +10,22 @@ from conftest import constraints_args, data_of, open_session, prereq_args, ready
 from parenting_response.db import MemoryDatabase
 
 
-async def test_g0_shortcircuit_locks_everything(client: Client, db: MemoryDatabase) -> None:
-    """驗收2:G0 短路 → session=redflag_stopped 且後續鎖死;回轉介。"""
+async def test_g0_shortcircuit_signals_not_stops(client: Client, db: MemoryDatabase) -> None:
+    """v3.2 A 件:① G0 短路 → 訊號不停案——照常建案,旗標+severity=高,
+    回傳含 referral 與 safety_mode 標記,FSM 照常推進(② 可走)。"""
     r = data_of(await client.call_tool("constraints", constraints_args(
         facts="他說他不想活了", emotion="害怕")))
     sid = r["session_id"]
     assert r["redflag"]["hit"] is True
     assert "113" in r["referral"]
-    assert r["card"] is None
+    assert r["safety_mode"] is True
+    assert r["constraints"]["red_lines"] and r["inquiry_probes"]  # ① 本職照回,不斷供
     s = db._sessions[sid]
-    assert s["status"] == "redflag_stopped" and s["stage"] == "redflag_stopped"
+    assert s["status"] == "open" and s["stage"] == "constrained"
+    assert s["redflag_active"] is True and s["redflag_vector"] == "child"
     assert s["severity"] == "高"
-    blocked = [
-        ("prerequisites", prereq_args(sid)),
-        ("core_tags", {"session_id": sid}),
-        ("finalize", {"session_id": sid, "outcome": "escalated_to_redflag", "draft": None}),
-    ]
-    for tool, args in blocked:
-        with pytest.raises(ToolError, match="E_INVALID_STATE"):
-            await client.call_tool(tool, args)
+    r2 = data_of(await client.call_tool("prerequisites", prereq_args(sid)))  # FSM 不鎖
+    assert r2 == {"next": "core_tags"}
 
 
 async def test_g0_warning_raises_severity_at_1(client: Client, db: MemoryDatabase) -> None:
@@ -41,8 +38,11 @@ async def test_g0_warning_raises_severity_at_1(client: Client, db: MemoryDatabas
     assert db._sessions[sid]["status"] == "open"
 
 
-async def test_g0_recheck_escalates_with_auto_record(client: Client, db: MemoryDatabase) -> None:
-    """③ 每輪 reaction 複檢 G0:命中 → redflag_stopped + 自動 record。"""
+async def test_g0_recheck_flags_and_switches_to_safety(
+    client: Client, db: MemoryDatabase
+) -> None:
+    """v3.2 A 件:③ 複檢命中 → 訊號(旗標+severity),照常記輪;該輪起回傳換
+    安全約束集(無一般管教 TAG),不自動收案、不產 record。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
     r = data_of(await client.call_tool("core_tags", {
@@ -50,13 +50,20 @@ async def test_g0_recheck_escalates_with_auto_record(client: Client, db: MemoryD
         "reaction_note": "他撞牆說想消失",
     }))
     assert r["redflag"]["hit"] is True and "113" in r["referral"]
+    assert r["safety_mode"] is True
+    assert "response_tags" not in r  # 一般管教 TAG 斷供,換軌安全約束集
+    assert r["safety_tags"]["vector"] == "child"
+    assert r["safety_tags"]["base"]["source"]
+    assert r["dev_stages"]["erikson"]  # 發展段位與風險無關,照回
     s = db._sessions[sid]
-    assert s["status"] == "redflag_stopped" and s["stage"] == "redflag_stopped"
-    rec = await db.get_record_by_session(sid)
-    assert rec is not None and rec["outcome"] == "escalated_to_redflag"
-    assert rec["draft"] is None
-    with pytest.raises(ToolError, match="E_INVALID_STATE"):  # 終態吸收
-        await client.call_tool("core_tags", {"session_id": sid, "child_reaction": "鬆動配合"})
+    assert s["status"] == "open" and s["redflag_active"] is True
+    assert s["severity"] == "高"
+    assert await db.get_record_by_session(sid) is None  # 不再自動收案
+    assert len(await db.get_rounds(sid)) == 2  # 命中輪照常記
+    r2 = data_of(await client.call_tool("core_tags", {  # 後續輪維持 safety 換軌
+        "session_id": sid, "child_reaction": "鬆動配合"}))
+    assert r2["safety_mode"] is True and "response_tags" not in r2
+    assert r2["converged"] is False  # safety_mode 下不出收斂訊號
 
 
 async def test_reaction_warning_raises_severity(client: Client, db: MemoryDatabase) -> None:
@@ -71,7 +78,8 @@ async def test_reaction_warning_raises_severity(client: Client, db: MemoryDataba
 
 
 async def test_high_tension_round_requires_note(client: Client, db: MemoryDatabase) -> None:
-    """#4:高張力輪缺 reaction_note → ask-gate(不 insert round);補 note 含短路詞 → escalate。"""
+    """#4:高張力輪缺 reaction_note → ask-gate(不 insert round);補 note 含短路詞
+    → 旗標訊號 + 安全約束集(v3.2:不停案)。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
     r = data_of(await client.call_tool("core_tags", {
@@ -80,8 +88,9 @@ async def test_high_tension_round_requires_note(client: Client, db: MemoryDataba
     assert len(await db.get_rounds(sid)) == 1  # ask-gate 不落輪
     r2 = data_of(await client.call_tool("core_tags", {
         "session_id": sid, "child_reaction": "情緒爆發", "reaction_note": "他說他不想活了"}))
-    assert r2["redflag"]["hit"] is True
-    assert db._sessions[sid]["status"] == "redflag_stopped"
+    assert r2["redflag"]["hit"] is True and r2["safety_mode"] is True
+    s = db._sessions[sid]
+    assert s["status"] == "open" and s["redflag_active"] is True
 
     sid2 = await ready_session(client)  # 退縮害怕同屬高張力
     await client.call_tool("core_tags", {"session_id": sid2})
@@ -164,33 +173,43 @@ async def test_pattern_check_rejects_then_accepts(client: Client, db: MemoryData
 
 
 async def test_finalize_selfnote_shortcircuit_referral(client: Client, db: MemoryDatabase) -> None:
-    """#2:④ parent_self_note 含短路詞 → 案照收,但轉介必達 + severity 高。"""
+    """#2+v3.2:④ parent_self_note 含短路詞 → 訊號已落;無 referral_ack 先擋
+    (E_MISSING_AXIS,轉介必達的 code 強制),補 ack 後案照收且 record.redflag=true。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
-    r = data_of(await client.call_tool("finalize", {
+    args = {
         "session_id": sid, "outcome": "partial",
         "draft": "我看到你很生氣,我們先深呼吸。",
         "parent_self_note": "我快忍不住打他了,怕自己傷害孩子",
-    }))
+    }
+    with pytest.raises(ToolError, match="E_MISSING_AXIS"):
+        await client.call_tool("finalize", args)
+    s = db._sessions[sid]
+    assert s["severity"] == "高" and s["redflag_active"] is True  # 擋下但訊號不丟
+    assert s["redflag_vector"] == "parent"
+    r = data_of(await client.call_tool("finalize", {**args, "referral_ack": True}))
     assert "record_id" in r
     assert r["redflag"]["hit"] is True and "113" in r["referral"]
-    s = db._sessions[sid]
-    assert s["severity"] == "高" and s["status"] == "finalized"  # 不拒收、不改 redflag_stopped
-    assert await db.get_record_by_session(sid) is not None
+    assert db._sessions[sid]["status"] == "finalized"  # 不拒收
+    rec = await db.get_record_by_session(sid)
+    assert rec is not None and rec["redflag"] is True
 
 
 async def test_short_finalize_g0_not_skipped(client: Client, db: MemoryDatabase) -> None:
-    """#2:short 只略過 pattern_check,不略過 G0。"""
+    """#2+v3.2:short 只略過 pattern_check,不略過 G0——命中同樣要 referral_ack。"""
     sid = await open_session(client, facts="他今天主動把碗收到水槽", emotion="開心")
     await client.call_tool("prerequisites", prereq_args(
         sid, problem_category="正向紀錄", emotion_intensity="低", script_decision="skip"))
-    r = data_of(await client.call_tool("finalize", {
-        "session_id": sid, "outcome": "resolved",
-        "outcome_note": "他說最近想消失,我很擔心",
-    }))
+    args = {"session_id": sid, "outcome": "resolved",
+            "outcome_note": "他說最近想消失,我很擔心"}
+    with pytest.raises(ToolError, match="E_MISSING_AXIS"):
+        await client.call_tool("finalize", args)
+    r = data_of(await client.call_tool("finalize", {**args, "referral_ack": True}))
     assert "record_id" in r
     assert r["redflag"]["hit"] is True and "113" in r["referral"]
     assert db._sessions[sid]["severity"] == "高"
+    rec = await db.get_record_by_session(sid)
+    assert rec is not None and rec["redflag"] is True
 
 
 async def test_finalize_followup_warning(client: Client, db: MemoryDatabase) -> None:
@@ -216,17 +235,22 @@ async def test_finalize_clean_shape_unchanged(client: Client) -> None:
 
 
 async def test_pattern_reject_keeps_g0_signal(client: Client, db: MemoryDatabase) -> None:
-    """#2:draft 踩 pattern 被拒收時,G0 訊號不丟——severity 已落、回應附轉介。"""
+    """#2+v3.2:G0 命中 + draft 踩 pattern——referral_ack 閘先行(安全優先),
+    補 ack 後 pattern 拒收照常,G0 訊號全程不丟。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
-    r = data_of(await client.call_tool("finalize", {
+    args = {
         "session_id": sid, "outcome": "partial",
         "draft": "你就是講不聽。",
         "parent_self_note": "我已經失手打過他一次",
-    }))
+    }
+    with pytest.raises(ToolError, match="E_MISSING_AXIS"):  # 先要求轉介送達
+        await client.call_tool("finalize", args)
+    assert db._sessions[sid]["severity"] == "高"  # 擋下但訊號已落
+    r = data_of(await client.call_tool("finalize", {**args, "referral_ack": True}))
     assert r["rejected"] is True and "113" in r["referral"]
     s = db._sessions[sid]
-    assert s["severity"] == "高" and s["status"] == "open"  # 拒收不落庫,但不無聲
+    assert s["status"] == "open"  # 拒收不落庫,但不無聲
 
 
 async def test_normal_finalize_requires_draft(client: Client) -> None:

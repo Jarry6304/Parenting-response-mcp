@@ -19,11 +19,12 @@ from parenting_response.schema import PRError
 
 
 async def test_constraints_missing_inputs_no_session(client: Client, db: MemoryDatabase) -> None:
-    """① 缺 facts/emotion/mode → E_MISSING_AXIS,不建 session。"""
-    with pytest.raises(ToolError, match="E_MISSING_AXIS"):
-        await client.call_tool("constraints", constraints_args(mode=None))
+    """① 缺 facts / mode 亂寫 → E_MISSING_AXIS,不建 session
+    (mode 缺省是入口 ask-gate,見 test_entry)。"""
     with pytest.raises(ToolError, match="E_MISSING_AXIS"):
         await client.call_tool("constraints", constraints_args(facts=None))
+    with pytest.raises(ToolError, match="E_MISSING_AXIS"):
+        await client.call_tool("constraints", constraints_args(emotion=None))
     with pytest.raises(ToolError, match="E_MISSING_AXIS"):
         await client.call_tool("constraints", constraints_args(mode="觀察"))
     assert db._sessions == {}
@@ -164,6 +165,7 @@ async def test_stale_open_session_expires_on_next_constraints(
     """#6:逾期 open 案於下次 ① lazy 轉吸收態 expired;不產 record,severity 留存可查。"""
     stale = await ready_session(client)
     db._sessions[stale]["created_at"] -= _dt.timedelta(days=31)
+    db._sessions[stale]["updated_at"] -= _dt.timedelta(days=31)  # v3.2:最後活動錨同步回撥
     fresh = await open_session(client)  # 任一新 ① 觸發清掃
     s = db._sessions[stale]
     assert s["status"] == "expired" and s["stage"] == "expired"

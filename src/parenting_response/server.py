@@ -31,17 +31,22 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         mode: str | None = None,
         child_id: str = "C1",
         linked_plan_id: str | None = None,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
-        """① 約束探詢(內含 G0)。
+        """① 約束探詢(內含 G0 訊號)+ 入口分流。
 
-        必要:`facts / emotion / mode`(mode ∈ live|rehearsal)。
+        mode 缺 → 回入口 ask-gate{options: live|retro|resume, open_sessions}(不建案);
+        mode=resume + session_id → 接手 open 舊案,回三軸與輪摘要(不建新案);
+        mode ∈ live|rehearsal|retro → 必要 `facts / emotion`(retro=事後覆盤),
         過 → 回 {session_id, 禁用詞+紅線約束集, Maslow/Satir 探點}(引導 S1);
-        G0 短路命中 → session=redflag_stopped,回轉介,鎖 ②③④。
+        G0 短路命中(v3.2 訊號,不停案)→ 照常建案,另回 {redflag, referral,
+        safety_mode=true}——轉介請立即向家長送達,後續 ③ 將換安全約束集。
         """
         try:
             return await orch.constraints(
                 facts=facts, emotion=emotion, mode=mode,
                 child_id=child_id, linked_plan_id=linked_plan_id,
+                session_id=session_id,
             )
         except PRError as exc:
             raise ToolError(str(exc)) from exc
@@ -53,10 +58,12 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         emotion_intensity: str | None = None,
         problem_category: str | None = None,
         script_decision: str | None = None,
+        parent_action: str | None = None,
     ) -> dict[str, Any]:
         """② 必備條件(+ 正向紀錄硬閘)。
 
         驗 `age_band ∈ 2-3|4-6|7-11|12+`、`emotion_intensity ∈ 低|中|高`。
+        retro 模式必填 `parent_action`(當時你實際怎麼處理;進 G0 複檢)。
         正向紀錄且缺 `script_decision ∈ skip|generate` → 回 ask-gate(不解鎖);
         skip → 走 short ④;generate / 一般 → 解鎖 ③。
         """
@@ -65,6 +72,7 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
                 session_id=session_id, age_band=age_band,
                 emotion_intensity=emotion_intensity,
                 problem_category=problem_category, script_decision=script_decision,
+                parent_action=parent_action,
             )
         except PRError as exc:
             raise ToolError(str(exc)) from exc
@@ -74,18 +82,23 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         session_id: str,
         child_reaction: str | None = None,
         reaction_note: str | None = None,
+        parent_decision: str | None = None,
     ) -> dict[str, Any]:
         """③ 各核心條件(乒乓,可 ×n)。
 
         回 6 回應核心 TAG(標 primary/support,依 child_reaction 確定性映射)
         + Erikson/Piaget 查表 stage + converged(code 規則,非 host 自報)。
-        round 0 = NULL 反應;round>0 對 reaction_note 複檢 G0,命中 → redflag_stopped。
+        round 0 = NULL 反應;round>0 對 reaction_note 複檢 G0——命中為訊號
+        (v3.2:不停案,照常記輪),該輪起回傳換 safety_tags 安全約束集
+        (陪伴/傾聽/降溫+轉介),不出一般管教 TAG。
+        上輪已收斂(live)→ 回收束 ask-gate:家長要繼續須帶
+        parent_decision="continue",要收尾改呼 finalize。第 5 輪起附 suggest_pause。
         child_reaction ∈ 鬆動配合|否認堅持|情緒爆發|退縮害怕|反問試探|轉移打岔。
         """
         try:
             return await orch.core_tags(
                 session_id=session_id, child_reaction=child_reaction,
-                reaction_note=reaction_note,
+                reaction_note=reaction_note, parent_decision=parent_decision,
             )
         except PRError as exc:
             raise ToolError(str(exc)) from exc
@@ -100,12 +113,15 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         outcome_note: str | None = None,
         parent_self_note: str | None = None,
         followup: str | None = None,
+        referral_ack: bool | None = None,
     ) -> dict[str, Any]:
         """④ 總結分析(終態)。
 
         一般模式(stage=ready):須交 draft → 禁用詞 pattern_check,過則落 record;
         含禁用詞 → 拒落庫,回違規詞要求重生。
         short 模式(stage=short_pending):不接受 draft,只記事、不跑 pattern_check。
+        紅旗訊號在案(v3.2):須帶 referral_ack=true(轉介已向家長送達),
+        否則 E_MISSING_AXIS;落庫之 record.redflag=true,不進 promotion 鏈。
         outcome ∈ resolved|partial|unresolved|escalated_to_redflag;
         claimed_sources ⊆ 6 回應核心(軟溯源);maslow_need ⊆ 生理|安全|愛與歸屬|尊重
         (① 探點命中之 host 回報)。
@@ -115,7 +131,7 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
                 session_id=session_id, outcome=outcome, draft=draft,
                 claimed_sources=claimed_sources, maslow_need=maslow_need,
                 outcome_note=outcome_note, parent_self_note=parent_self_note,
-                followup=followup,
+                followup=followup, referral_ack=referral_ack,
             )
         except PRError as exc:
             raise ToolError(str(exc)) from exc
