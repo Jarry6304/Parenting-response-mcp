@@ -75,16 +75,23 @@ class Orchestrator:
 
     async def constraints(
         self, *, facts: str | None, emotion: str | None, mode: str | None,
-        child_id: str, linked_plan_id: str | None,
+        child_id: str, linked_plan_id: str | None, session_id: str | None = None,
     ) -> dict[str, Any]:
-        if not facts or not emotion or mode not in MODES:
-            raise PRError(E_MISSING_AXIS, "① 必要:facts / emotion / mode(live|rehearsal)")
-
         # 棄案 TTL(lazy 清掃):host 斷線遺留的 open 案逾期轉吸收態 expired,
-        # 不產 record;severity 留在 sessions 供 L0 追蹤。錨定最後活動而非建案時間。
+        # 不產 record;severity 留在 sessions 供 L0 追蹤。錨定最後活動而非建案時間
+        # (updated_at / rounds;resume 即續期)。
         if self.session_ttl_days > 0:
             cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=self.session_ttl_days)
             await self.db.expire_stale_sessions(cutoff)
+
+        # v3.2 C 件入口分流:mode 缺 → ask-gate(不建案、不報錯),附該 child 的
+        # open 案清單供「續上次」;mode=resume → 接手舊案,不建新案。
+        if mode is None:
+            return await self._entry_gate(child_id)
+        if mode == "resume":
+            return await self._resume(session_id)
+        if not facts or not emotion or mode not in MODES:
+            raise PRError(E_MISSING_AXIS, "① 必要:facts / emotion / mode(live|rehearsal|retro)")
 
         # linked_plan 守衛(承 v2.2 A2 + v3.2 A 件):須指向存在且 status=planned 的
         # record;紅旗案不可引用——redflag=true 為 v3.2 主錨,status/outcome 為 legacy
@@ -124,6 +131,62 @@ class Orchestrator:
             result["redflag"] = rf.model_dump()
             result["referral"] = rf.referral
             result["safety_mode"] = True
+        return result
+
+    # ── ① 入口分流(v3.2 C 件):ask-gate + resume ────────────────────
+
+    async def _entry_gate(self, child_id: str) -> dict[str, Any]:
+        """mode 缺 → 入口 ask-gate:列三個入口與該 child 的 open 案(不建案)。"""
+        opens = await self.db.list_open_sessions(child_id)
+        return {
+            "requires": "mode",
+            "options": ["live", "retro", "resume"],
+            "ask": "現在要處理哪種情況?live=正在發生 / retro=事後覆盤 / resume=接續未完成的案",
+            "open_sessions": [
+                {
+                    "session_id": o["session_id"],
+                    "stage": o["stage"],
+                    "mode": o["mode"],
+                    "facts": str(o["facts"])[:30],  # 截斷:提示用,全文走 resume
+                    "age_band": o.get("age_band"),
+                    "last_active": (o.get("updated_at") or o["created_at"]).isoformat(),
+                }
+                for o in opens
+            ],
+        }
+
+    async def _resume(self, session_id: str | None) -> dict[str, Any]:
+        """接手 open 舊案:回三軸與輪摘要重建上下文,touch 續期;不建案、不動 stage。"""
+        if not session_id:
+            raise PRError(E_MISSING_AXIS, "resume 必填 session_id(可先以 mode 缺省呼叫 ① 取得 open 案清單)")
+        s = await self.db.get_session(session_id)
+        if s is None or s["status"] != "open":
+            raise PRError(E_INVALID_STATE, f"session {session_id} 不存在或非 open(過期案不可續)")
+        await self.db.update_session(
+            session_id, {"updated_at": _dt.datetime.now(_dt.timezone.utc)})  # 續期錨
+        rounds = await self.db.get_rounds(session_id)
+        next_map = {"constrained": "prerequisites", "ready": "core_tags",
+                    "short_pending": "finalize"}
+        result: dict[str, Any] = {
+            "session_id": session_id,
+            "resumed": True,
+            "stage": s["stage"],
+            "mode": s["mode"],
+            "facts": s["facts"],
+            "emotion": s["emotion"],
+            "axes": {"age_band": s.get("age_band"),
+                     "emotion_intensity": s.get("emotion_intensity"),
+                     "problem_category": s.get("problem_category")},
+            # 輪摘要只含受控詞序列,不回放 reaction_note 自由文本(最小重建面)
+            "rounds_summary": {
+                "count": len(rounds),
+                "reactions": [str(r["child_reaction"]) for r in rounds
+                              if r.get("child_reaction") is not None],
+            },
+            "next": next_map[str(s["stage"])],
+        }
+        if s.get("redflag_active"):
+            result["safety_mode"] = True  # 接手即知:此案已在安全軌
         return result
 
     # ── ② prerequisites(必填軸 + 正向紀錄硬閘) ───────────────────

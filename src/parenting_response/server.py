@@ -31,10 +31,13 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
         mode: str | None = None,
         child_id: str = "C1",
         linked_plan_id: str | None = None,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
-        """① 約束探詢(內含 G0 訊號)。
+        """① 約束探詢(內含 G0 訊號)+ 入口分流。
 
-        必要:`facts / emotion / mode`(mode ∈ live|rehearsal|retro;retro=事後覆盤)。
+        mode 缺 → 回入口 ask-gate{options: live|retro|resume, open_sessions}(不建案);
+        mode=resume + session_id → 接手 open 舊案,回三軸與輪摘要(不建新案);
+        mode ∈ live|rehearsal|retro → 必要 `facts / emotion`(retro=事後覆盤),
         過 → 回 {session_id, 禁用詞+紅線約束集, Maslow/Satir 探點}(引導 S1);
         G0 短路命中(v3.2 訊號,不停案)→ 照常建案,另回 {redflag, referral,
         safety_mode=true}——轉介請立即向家長送達,後續 ③ 將換安全約束集。
@@ -43,6 +46,7 @@ def build_server(orch: Orchestrator, *, auth: AuthProvider | None = None) -> Fas
             return await orch.constraints(
                 facts=facts, emotion=emotion, mode=mode,
                 child_id=child_id, linked_plan_id=linked_plan_id,
+                session_id=session_id,
             )
         except PRError as exc:
             raise ToolError(str(exc)) from exc

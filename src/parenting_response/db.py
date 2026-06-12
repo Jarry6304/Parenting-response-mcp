@@ -154,6 +154,7 @@ ALTER TABLE records ALTER COLUMN schema_version SET DEFAULT 3;
 class Database(Protocol):
     async def create_session(self, row: dict[str, Any]) -> None: ...
     async def get_session(self, session_id: str) -> dict[str, Any] | None: ...
+    async def list_open_sessions(self, child_id: str) -> list[dict[str, Any]]: ...
     async def update_session(self, session_id: str, fields: dict[str, Any]) -> None: ...
     async def insert_round(
         self, session_id: str, *, child_reaction: str | None, reaction_note: str | None,
@@ -199,6 +200,13 @@ class MemoryDatabase:
     async def get_session(self, session_id: str) -> dict[str, Any] | None:
         row = self._sessions.get(session_id)
         return dict(row) if row else None
+
+    async def list_open_sessions(self, child_id: str) -> list[dict[str, Any]]:
+        # 入口 ask-gate 的「續上次」清單(v3.2 C 件);最近活動在前
+        rows = [dict(s) for s in self._sessions.values()
+                if s["child_id"] == child_id and s["status"] == "open"]
+        rows.sort(key=lambda r: r.get("updated_at") or r["created_at"], reverse=True)
+        return rows
 
     async def update_session(self, session_id: str, fields: dict[str, Any]) -> None:
         async with self._lock:
@@ -329,6 +337,17 @@ class PgDatabase:
         async with self._pool.connection() as conn:
             cur = await conn.execute("SELECT * FROM sessions WHERE session_id = %s", (session_id,))
             return await self._fetchone_dict(cur)
+
+    async def list_open_sessions(self, child_id: str) -> list[dict[str, Any]]:
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM sessions WHERE child_id = %s AND status = 'open'
+                ORDER BY COALESCE(updated_at, created_at) DESC
+                """,
+                (child_id,),
+            )
+            return await self._fetchall_dicts(cur)
 
     async def update_session(self, session_id: str, fields: dict[str, Any]) -> None:
         from psycopg import sql
