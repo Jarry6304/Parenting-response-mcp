@@ -54,6 +54,64 @@ G0_WARNING_PHRASES: tuple[str, ...] = (
     "衣架", "棍子拿來", "愛的小手", "手伸出來", "揍你", "打到你乖", "欠揍", "罰跪", "罰站到",
 )
 
+# ── 語意紅線(v3.2 H 件):報告 slot 的「主詞+負面定性」tripwire ──
+# 第一層:警告不拒收——子句同時含孩子主詞與評價詞、且無否定前綴 → 記
+# semantic_warnings(events 稽核 + 下期季報回放)。詞表從嚴列「人格定性」詞,
+# 不含行為描述詞(「打人」是行為,「壞」是定性)。
+
+SEMANTIC_SUBJECT_RE = re.compile(r"孩子|兒子|女兒|哥哥|弟弟|姊姊|妹妹|他|她")
+SEMANTIC_EVAL_TERMS: tuple[str, ...] = (
+    "懶", "笨", "壞", "故意", "難搞", "難帶", "講不聽", "不受教", "沒救",
+    "白目", "欠管", "皮在癢", "屢勸不聽", "無可救藥", "問題兒童",
+)
+SEMANTIC_NEG_PREFIX_RE = re.compile(r"不是|並非|沒有|不再|不會|很少")
+_CLAUSE_SPLIT_RE = re.compile(r"[,。;!?\n,;!?]")
+
+# v3.2 K 件:照顧者比較 tripwire(報告 slot)——「爸爸比媽媽會帶」這類句子
+# 把教養寫成排名,進 tripwire(警告不拒收;同 H 件回放)。
+CAREGIVER_COMPARE_RE = re.compile(
+    r"(?:爸爸?|媽媽?)(?:比|不如|沒有|贏過|輸給)(?:爸爸?|媽媽?)")
+
+
+def semantic_warnings(text: str) -> list[dict[str, str]]:
+    """語意 tripwire:回 [{clause, term}](空 = 乾淨)。子句粒度判定,
+    否定前綴(「他不是故意的」)豁免;照顧者比較句(K 件)一併警示。"""
+    hits: list[dict[str, str]] = []
+    for clause in _CLAUSE_SPLIT_RE.split(text):
+        stripped = clause.strip()
+        if not stripped:
+            continue
+        m = CAREGIVER_COMPARE_RE.search(stripped)
+        if m is not None:  # 教養不是排名:比較句不豁免否定前綴
+            hits.append({"clause": stripped, "term": m.group(0)})
+            continue
+        if not SEMANTIC_SUBJECT_RE.search(stripped):
+            continue
+        if SEMANTIC_NEG_PREFIX_RE.search(stripped):
+            continue
+        for term in SEMANTIC_EVAL_TERMS:
+            if term in stripped:
+                hits.append({"clause": stripped, "term": term})
+                break
+    return hits
+
+
+# ── ⑤ archive 防滲(v3.2 E 件):工具協議標記不得混入逐字稿 ──────
+# 錨定「協議標記」而非語意:逐字稿是家長與 host 的對話原文,任何
+# function-call / tool-use 結構出現即代表 host 把工具軌道誤倒進來(或偽造),
+# 整 chunk 拒收。樣式涵蓋 XML 形(<function…>)與 JSON 形("tool_calls":)。
+_TOOL_MARKUP_RE = re.compile(
+    r"</?(?:antml:)?(?:function|invoke|parameter|tool_use|tool_result|function_calls|function_results)\b[^>]*>"
+    r"|\"(?:tool_calls|function_call|tool_use_id|tool_result)\"\s*:"
+    r"|```json\s*\{",
+)
+
+
+def find_tool_markup(text: str) -> list[str]:
+    """逐字稿工具標記掃描:回命中樣式列(空 = 乾淨)。"""
+    return [m.group(0) for m in _TOOL_MARKUP_RE.finditer(text)]
+
+
 REFERRAL_TEXT = (
     "這個情況超出本系統的安全範圍,請尋求專業協助:"
     "兒童青少年心智科或心理諮商;台灣 113 保護專線;若有立即危險請撥 110/119。"

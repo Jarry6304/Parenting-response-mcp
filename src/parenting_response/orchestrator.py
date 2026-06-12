@@ -13,14 +13,19 @@ redflag_stopped 自 v3.2 移除(legacy 列保留,查詢視同 closed)。
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
+import json
 import uuid
 from typing import Any
 
+from . import report, report_core
+from .auth import current_sub
 from .cores import inquiry_probes, red_line_union, response_tags, review_tags, safety_cards
-from .db import Database, UniqueViolation
+from .db import Database, UniqueViolation, dump_json
 from .redflag import check_shortcircuit, check_warning
 from .schema import (
     AGE_BANDS,
+    CAREGIVERS,
     CHILD_REACTIONS,
     E_INVALID_LINK,
     E_INVALID_STATE,
@@ -36,6 +41,7 @@ from .schema import (
     RESPONSE_CORES,
     SCRIPT_DECISIONS,
     SEVERITY_ORDER,
+    TZ_TAIPEI,
     PRError,
     Redflag,
 )
@@ -45,6 +51,8 @@ from .wordlists import (
     OUTPUT_PATTERN_F5,
     REFERRAL_TEXT,
     find_output_violations,
+    find_tool_markup,
+    semantic_warnings,
 )
 
 # 反應二級強調(單一來源 = spec v3.0「反應二級強調」表;此處為 code 投影,僅含 6 回應核心)
@@ -63,14 +71,39 @@ ROUND_SOFT_CAP = 5  # v3.2 D 件:乒乓軟上限(第 5 輪起建議暫停,不強
 
 # record_id 的「當日」= 臺北日,與部署主機時區無關(record-schema);
 # 台灣自 1980 無夏令時,固定 +8 免 tzdata 依賴
-_TZ_TAIPEI = _dt.timezone(_dt.timedelta(hours=8))
+_TZ_TAIPEI = TZ_TAIPEI  # 別名保留(record_id 當日錨;單一來源 = schema.TZ_TAIPEI)
 
 
 class Orchestrator:
-    def __init__(self, db: Database, *, session_ttl_days: int = 30) -> None:
+    def __init__(self, db: Database, *, session_ttl_days: int = 30,
+                 caregiver_map: dict[str, str] | None = None) -> None:
         self.db = db
         self.session_ttl_days = session_ttl_days  # ≤0 = 停用棄案清掃
+        # v3.2 K 件:sub → caregiver(爸|媽)。身分來自已驗 token,不收輸入參數
+        # (誰登入就是誰,host/家長皆不可代填)。local 模式(無 sub)= 預設「爸」。
+        self.caregiver_map = caregiver_map or {}
         # 注意:無 self.llm —— v3 零推論,刻意不收 LLM client
+
+    async def _resolve_caregiver(self) -> str:
+        """已驗 sub → caregiver;authkit 模式 sub 未映射 → E_INVALID_STATE + 稽核
+        (部署後新增帳號卻忘了配 CAREGIVER_MAP,要炸在第一步,不要默記錯人)。"""
+        sub = current_sub()
+        if sub is None:
+            return CAREGIVERS[0]  # local 模式單人:預設「爸」
+        caregiver = self.caregiver_map.get(sub)
+        if caregiver not in CAREGIVERS:
+            await self._log_event(None, "caregiver_unmapped", {"sub": sub})
+            raise PRError(E_INVALID_STATE,
+                          f"sub={sub} 未映射 caregiver(CAREGIVER_MAP 未配置此帳號)")
+        return caregiver
+
+    async def _log_event(self, session_id: str | None, kind: str,
+                         payload: dict[str, Any]) -> None:
+        """events 統一落點(v3.2 I 件):authkit 模式自動附已驗 sub(誰觸發的)。"""
+        sub = current_sub()
+        if sub is not None:
+            payload = {**payload, "sub": sub}
+        await self.db.log_event(session_id, kind, payload)
 
     # ── ① constraints(約束探詢,內含 G0) ─────────────────────────
 
@@ -107,6 +140,7 @@ class Orchestrator:
 
         session_id = uuid.uuid4().hex
         labeled = (("facts", facts), ("emotion", emotion))
+        caregiver = await self._resolve_caregiver()  # K 件:身分由 token 定,先驗再建案
 
         # G0(v3.2 A 件:訊號,不停案)——短路命中照常建案,旗標+severity=高,
         # FSM 照常推進;強制力由輸出匣承接(③ safety 卡、④ referral_ack)。
@@ -119,6 +153,7 @@ class Orchestrator:
             linked_plan_id=linked_plan_id,
             redflag_active=rf is not None,
             redflag_vector=rf.vector if rf is not None else None,
+            caregiver=caregiver,
         ))
         if rf is not None or warning_hits:
             await self._log_g0(session_id, "①", rf=rf, warnings=warning_hits)
@@ -416,7 +451,7 @@ class Orchestrator:
             violations = self._pattern_check(draft)  # 禁用詞 code 後檢
             if violations:
                 # 拒收稽核(defect-fixes #7):重試軌跡可考——host 踩了哪些詞、是否屢試
-                await self.db.log_event(session_id, "finalize_rejected", {
+                await self._log_event(session_id, "finalize_rejected", {
                     "violations": violations, "outcome": outcome,
                     "redflag_hit": rf is not None,
                 })
@@ -436,13 +471,267 @@ class Orchestrator:
         )
         if not ok:
             raise PRError(E_INVALID_STATE, "session 已非 open(併發 finalize 恰一成功)")
-        result: dict[str, Any] = {"record_id": record["record_id"]}
+        result: dict[str, Any] = {"record_id": record["record_id"],
+                                  "next": "archive"}  # v3.2 E 件:收尾鏈 ④→⑤→report(event)
         if rf is not None:
             result["redflag"] = rf.model_dump()
             result["referral"] = rf.referral
         elif warnings:
             result["warnings"] = warnings
         return result
+
+    # ── ⑤ archive(v3.2 E 件:原始逐字稿歸檔) ───────────────────────
+
+    async def archive(
+        self, *, session_id: str, chunk_no: int, turns: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """逐字稿歸檔:任何 status 的既有案皆可收(終態案補錄常態)。
+
+        防滲:工具協議標記命中 → 整 chunk 拒收(逐字稿只該有對話原文);
+        冪等:UNIQUE(session_id, content_hash);G0 掃 parent turns(assistant
+        是系統產出,無自陳意義)→ 訊號補升,record 不回改。
+        """
+        s = await self.db.get_session(session_id)
+        if s is None:
+            raise PRError(E_INVALID_STATE, f"session {session_id} 不存在")
+        if not turns:
+            raise PRError(E_MISSING_AXIS, "⑤ turns 不可為空")
+        for i, t in enumerate(turns):
+            role = t.get("role")
+            content = t.get("content")
+            if role not in ("parent", "assistant") or not isinstance(content, str) or not content:
+                raise PRError(E_MISSING_AXIS,
+                              f"⑤ turns[{i}] 須為 {{role: parent|assistant, content: 非空文字}}")
+
+        markup_hits: list[dict[str, Any]] = []
+        for i, t in enumerate(turns):
+            found = find_tool_markup(str(t["content"]))
+            if found:
+                markup_hits.append({"turn": i, "patterns": found})
+        if markup_hits:  # 整 chunk 拒收:逐字稿純度優先,部分落庫會造成靜默缺漏
+            await self._log_event(session_id, "archive_rejected", {
+                "source": "⑤", "chunk_no": chunk_no, "hits": markup_hits,
+            })
+            return {"rejected": True, "violations": markup_hits,
+                    "hint": "逐字稿含工具協議標記,請去除後整 chunk 重送(不落庫)"}
+
+        canonical = dump_json([{"role": t["role"], "content": t["content"]} for t in turns])
+        content_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        tid = await self.db.insert_transcript(
+            session_id, chunk_no=chunk_no, content_hash=content_hash, turns_json=canonical)
+        if tid is None:
+            return {"duplicate": True, "next": "report(event)"}  # 重送冪等,不重複落
+
+        # G0 全文複檢(僅 parent turns):補升旗標/severity + 稽核;已落 record 不回改
+        labeled = tuple((f"turns[{i}]", str(t["content"]))
+                        for i, t in enumerate(turns) if t["role"] == "parent")
+        rf = check_shortcircuit(labeled)
+        warning_hits = check_warning(labeled)
+        if rf is not None:
+            await self.db.update_session(session_id, self._redflag_updates(s, rf))
+        elif warning_hits:
+            await self.db.update_session(
+                session_id, {"severity": self._raise(s.get("severity"), "高")})
+        if rf is not None or warning_hits:
+            await self._log_g0(session_id, "⑤", rf=rf, warnings=warning_hits)
+
+        result: dict[str, Any] = {"archived": True, "chunk_no": chunk_no,
+                                  "next": "report(event)"}
+        if rf is not None:
+            result["redflag"] = rf.model_dump()
+            result["referral"] = rf.referral
+        return result
+
+    # ── report(v3.2 F+H 件:聚合 phase1 / 驗證組裝 phase2) ─────────
+
+    async def report(
+        self, *, scope: str, ref: str, slots: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """報告兩段式:slots 缺 → phase1(聚合+骨架+guardian);
+        slots 給 → phase2(五道驗證 → 確定性組裝 → 落庫 version+1)。"""
+        if scope not in report_core.REPORT_SCOPES:
+            raise PRError(E_MISSING_AXIS, f"scope 須 ∈ event|quarter|year:{scope}")
+        ctx = await self._report_context(scope, ref)
+        if slots is None:
+            return self._report_phase1(scope, ref, ctx)
+        return await self._report_phase2(scope, ref, ctx, slots)
+
+    async def _report_context(self, scope: str, ref: str) -> dict[str, Any]:
+        """聚合與 fixed 節素材(phase1/2 共用;同庫態同結果)。"""
+        secs = report_core.sections(scope)
+        ctx: dict[str, Any] = {"sections": secs}
+        if scope == "event":
+            s = await self.db.get_session(ref)
+            rec = await self.db.get_record_by_session(ref)
+            if s is None or rec is None:
+                raise PRError(E_INVALID_STATE,
+                              f"event 報告需已收案的 session(④ 完成):{ref}")
+            rounds = await self.db.get_rounds(ref)
+            agg = report.aggregate_event(s, rec, rounds)
+            agg["redflag_hits"] = sum(
+                1 for e in await self.db.get_events(ref) if e["kind"] == "g0_shortcircuit")
+            ctx["aggregates"] = agg
+            ctx["leak_texts"] = []  # event 為單案敘事,鼓勵引用,不做防滲
+            return ctx
+
+        if scope == "quarter" and not report.QUARTER_RE.fullmatch(ref):
+            raise PRError(E_MISSING_AXIS, f"quarter ref 格式須 YYYYQ1-4:{ref}")
+        if scope == "year" and not report.YEAR_RE.fullmatch(ref):
+            raise PRError(E_MISSING_AXIS, f"year ref 格式須 YYYY:{ref}")
+        start, end = report.period_bounds(scope, ref)
+        sessions = await self.db.list_sessions_between(start, end)
+        records = await self.db.list_records_between(start, end)
+        rounds_by = await self.db.list_rounds_for_sessions([str(s["session_id"]) for s in sessions])
+        ctx["aggregates"] = report.aggregate_period(sessions, records, rounds_by)
+
+        # 防滲基(隱私降階):匯總報告 slot 不得內含期內任何單案自由文本原文
+        texts: list[str] = []
+        for s in sessions:
+            texts.extend(str(s.get(k) or "") for k in ("facts", "emotion", "parent_action"))
+        for rec in records:
+            texts.extend(str(rec.get(k) or "") for k in
+                         ("draft", "outcome_note", "parent_self_note", "followup"))
+        for rs in rounds_by.values():
+            texts.extend(str(r.get("reaction_note") or "") for r in rs)
+        for s in sessions:
+            for t in await self.db.get_transcripts(str(s["session_id"])):
+                texts.append(str(t["turns"]))
+        ctx["leak_texts"] = [t for t in texts if t]
+
+        if scope == "quarter":
+            prev_ref = self._prev_quarter(ref)
+            prev = await self.db.get_report_latest("quarter", prev_ref)
+            ctx["prev_ref"] = prev_ref
+            ctx["prev_warnings"] = (
+                json.loads(str(prev["meta"])).get("semantic_warnings", []) if prev else [])
+        else:  # year:拉四季最新版;缺季照常出報,quarters_recap 標示
+            qrefs = [f"{ref}Q{i}" for i in range(1, 5)]
+            found = {q: r for q in qrefs
+                     if (r := await self.db.get_report_latest("quarter", q)) is not None}
+            ctx["quarter_refs"] = qrefs
+            ctx["quarters_found"] = found
+            ctx["missing_quarters"] = [q for q in qrefs if q not in found]
+        return ctx
+
+    def _fixed_contents(self, scope: str, ref: str, ctx: dict[str, Any]) -> dict[str, str]:
+        agg: dict[str, Any] = ctx["aggregates"]
+        out: dict[str, str] = {}
+        for sec in ctx["sections"]:
+            if sec["type"] != "fixed":
+                continue
+            sid = str(sec["id"])
+            if sid == "safety":
+                n = int(agg["redflag_hits"] if scope == "event" else agg["redflag_count"])
+                out[sid] = report.fill_safety_template(str(sec["template"]), n)
+            elif scope == "event" and sid == "overview":
+                out[sid] = report.render_event_overview(agg)
+            elif sid == "stats":
+                out[sid] = report.render_period_stats(agg, "本季" if scope == "quarter" else "全年")
+            elif sid == "prev_audit":
+                out[sid] = report.render_prev_audit(ctx.get("prev_warnings"))
+            elif sid == "quarters_recap":
+                out[sid] = report.render_quarters_recap(ctx["quarter_refs"], ctx["quarters_found"])
+        return out
+
+    def _report_phase1(self, scope: str, ref: str, ctx: dict[str, Any]) -> dict[str, Any]:
+        fixed = self._fixed_contents(scope, ref, ctx)
+        skeleton: list[dict[str, Any]] = []
+        for sec in ctx["sections"]:
+            item = dict(sec)
+            if sec["type"] == "fixed":
+                item["content"] = fixed[str(sec["id"])]
+            skeleton.append(item)
+        result: dict[str, Any] = {
+            "scope": scope, "ref": ref,
+            "aggregates": ctx["aggregates"],
+            "skeleton": skeleton,
+            "guardian": report_core.guardian(),  # H 件第三層:生成前自查
+            "next": "report(slots)",
+        }
+        if scope == "event":
+            result["raw_quota"] = report_core.validation()["raw_quota_event"]
+        if scope == "quarter":
+            result["prev_audit"] = {"ref": ctx["prev_ref"], "warnings": ctx["prev_warnings"]}
+        if scope == "year":
+            result["missing_quarters"] = ctx["missing_quarters"]
+        return result
+
+    async def _report_phase2(
+        self, scope: str, ref: str, ctx: dict[str, Any], slots: dict[str, str],
+    ) -> dict[str, Any]:
+        v = report_core.validation()
+        slot_secs = {str(s["id"]): s for s in ctx["sections"] if s["type"] == "slot"}
+
+        # 1) 槽齊備且無多餘鍵(host 不得自創章節、不得碰 fixed)
+        missing = sorted(set(slot_secs) - set(slots))
+        extra = sorted(set(slots) - set(slot_secs))
+        if missing or extra:
+            raise PRError(E_MISSING_AXIS, f"slots 不齊:缺 {missing or '無'} / 多 {extra or '無'}")
+        # 2) 字數上限
+        for sid, text in slots.items():
+            cap = int(slot_secs[sid]["max_chars"])
+            if len(text) > cap:
+                return {"rejected": True, "violations": [
+                    {"slot": sid, "kind": "over_length", "limit": cap, "got": len(text)}],
+                    "hint": "超出字數上限,請精煉後重交(不落庫)"}
+        # 3) 負面清單 ∪ 輸出禁用 pattern(拒收)
+        violations: list[dict[str, Any]] = []
+        for sid, text in slots.items():
+            neg = v["negative_re"].findall(text)
+            pat = find_output_violations(text)
+            for hit in (*neg, *pat):
+                violations.append({"slot": sid, "kind": "forbidden_term", "term": hit})
+        # 4) 數字白名單(僅匯總級:防 host 自創統計)
+        if scope in v["number_whitelist_scopes"]:
+            allowed = report.whitelist_numbers(ctx["aggregates"], ref)
+            for sid, text in slots.items():
+                for num in sorted(report.numbers_in(text) - allowed):
+                    violations.append({"slot": sid, "kind": "number_not_in_aggregates",
+                                       "term": num})
+            # 5) 防滲(僅匯總級):slot 不得內含期內單案自由文本的連續原文
+            windows = report.leak_windows(ctx["leak_texts"], int(v["leak_window"]))
+            for sid, text in slots.items():
+                leak = report.find_leak(text, windows, int(v["leak_window"]))
+                if leak is not None:
+                    violations.append({"slot": sid, "kind": "raw_text_leak", "term": leak})
+        if violations:
+            await self._log_event(None, "report_rejected", {
+                "scope": scope, "ref_key": ref, "violations": violations})
+            return {"rejected": True, "violations": violations,
+                    "hint": "slot 未過驗證,請依 violations 修正後重交(不落庫)"}
+
+        # H 件第一層 tripwire:語意警示——警告不拒收,稽核 + 存 meta(下期回放)
+        warnings: list[dict[str, str]] = []
+        for sid, text in slots.items():
+            for w in semantic_warnings(text):
+                warnings.append({**w, "slot": sid})
+        if warnings:
+            await self._log_event(None, "report_semantic_warning", {
+                "scope": scope, "ref_key": ref, "warnings": warnings})
+
+        contents = self._fixed_contents(scope, ref, ctx)
+        contents.update(slots)
+        body = report.assemble_body(scope, ref, ctx["sections"], contents)
+        row = await self.db.insert_report(
+            scope, ref, body=body,
+            meta_json=report.meta_json(ctx["aggregates"], slots, warnings))
+        await self._log_event(None, "report_audit", {
+            "scope": scope, "ref_key": ref, "version": row["version"],
+            "semantic_warning_count": len(warnings)})
+        result: dict[str, Any] = {
+            "report_id": row["report_id"], "scope": scope, "ref": ref,
+            "version": row["version"], "body": body,
+        }
+        if warnings:
+            result["semantic_warnings"] = warnings
+        return result
+
+    @staticmethod
+    def _prev_quarter(ref: str) -> str:
+        m = report.QUARTER_RE.fullmatch(ref)
+        assert m is not None
+        year, q = int(m.group(1)), int(m.group(2))
+        return f"{year - 1}Q4" if q == 1 else f"{year}Q{q - 1}"
 
     # ── 共用守衛 / 終態 ───────────────────────────────────────────
 
@@ -466,13 +755,13 @@ class Orchestrator:
         if round_no is not None:
             base["round_no"] = round_no
         if rf is not None:
-            await self.db.log_event(session_id, "g0_shortcircuit", {
+            await self._log_event(session_id, "g0_shortcircuit", {
                 **base, "field": rf.field, "phrase": rf.phrase, "excerpt": rf.excerpt,
                 "vector": rf.vector,         # 風險向(v3.2 G 件:組卡緣由可重建)
                 "referral_delivered": True,  # 命中路徑回傳必含 referral(by construction)
             })
         if warnings:
-            await self.db.log_event(session_id, "g0_warning", {
+            await self._log_event(session_id, "g0_warning", {
                 **base, "hits": [{"field": f, "phrase": p} for f, p in warnings],
             })
 
@@ -613,8 +902,10 @@ class Orchestrator:
     @staticmethod
     def _row(session_id: str, child_id: str, mode: str, facts: str, emotion: str,
              *, stage: str, status: str, severity: str, linked_plan_id: str | None,
-             redflag_active: bool = False, redflag_vector: str | None = None) -> dict[str, Any]:
+             redflag_active: bool = False, redflag_vector: str | None = None,
+             caregiver: str = "爸") -> dict[str, Any]:
         return {"session_id": session_id, "child_id": child_id, "mode": mode,
                 "stage": stage, "status": status, "facts": facts, "emotion": emotion,
                 "severity": severity, "linked_plan_id": linked_plan_id,
-                "redflag_active": redflag_active, "redflag_vector": redflag_vector}
+                "redflag_active": redflag_active, "redflag_vector": redflag_vector,
+                "caregiver": caregiver}

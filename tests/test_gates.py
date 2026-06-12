@@ -226,12 +226,12 @@ async def test_finalize_followup_warning(client: Client, db: MemoryDatabase) -> 
 
 
 async def test_finalize_clean_shape_unchanged(client: Client) -> None:
-    """#2:全文本乾淨 → 回傳形狀不變(回溯相容)。"""
+    """#2:全文本乾淨 → 回傳形狀固定 {record_id, next=archive}(v3.2 收尾鏈)。"""
     sid = await ready_session(client)
     await client.call_tool("core_tags", {"session_id": sid})
     r = data_of(await client.call_tool("finalize", {
         "session_id": sid, "outcome": "resolved", "draft": "我們一起想辦法。"}))
-    assert set(r) == {"record_id"}
+    assert set(r) == {"record_id", "next"} and r["next"] == "archive"
 
 
 async def test_pattern_reject_keeps_g0_signal(client: Client, db: MemoryDatabase) -> None:

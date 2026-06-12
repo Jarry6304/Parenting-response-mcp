@@ -1,0 +1,56 @@
+# 週備份(v3.2 J 件):Neon pg_dump → zstd → age 公鑰加密 → 推私有 backup repo。
+#
+# 需要的 repo secrets(設定步驟見 docs/deploy-runbook-v3.2.md):
+#   NEON_DATABASE_URL  Neon 連線字串(pg_dump 用;唯讀角色即可)
+#   AGE_PUBLIC_KEY     age 收件公鑰(age1…;私鑰**不進**任何雲端,離線保存)
+#   BACKUP_REPO        備份目的私有 repo(owner/name,例 jarry6304/parenting-backup)
+#   BACKUP_REPO_TOKEN  fine-grained PAT,僅該 repo 之 contents:write
+#
+# 還原演練(每季一次,流程見 runbook):clone backup repo → age -d → psql 灌入
+# → uv run pytest 全綠 → 丟棄演練庫。備份不可還原 = 沒有備份。
+
+name: weekly-backup
+
+on:
+  schedule:
+    - cron: "17 19 * * 6"  # 週六 19:17 UTC = 臺北週日 03:17(低峰)
+  workflow_dispatch: {}    # 手動觸發(演練/首跑驗證)
+
+jobs:
+  dump-encrypt-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 安裝 postgresql-client / zstd / age
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql-client zstd age
+
+      - name: pg_dump → zstd → age 加密
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          AGE_PUBLIC_KEY: ${{ secrets.AGE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          STAMP="$(date -u +%Y%m%d)"
+          pg_dump --no-owner --no-privileges "$NEON_DATABASE_URL" \
+            | zstd -19 -q \
+            | age -r "$AGE_PUBLIC_KEY" -o "backup-${STAMP}.sql.zst.age"
+          ls -lh backup-*.age
+
+      - name: 推送私有 backup repo
+        env:
+          BACKUP_REPO: ${{ secrets.BACKUP_REPO }}
+          BACKUP_REPO_TOKEN: ${{ secrets.BACKUP_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          STAMP="$(date -u +%Y%m%d)"
+          git clone --depth 1 \
+            "https://x-access-token:${BACKUP_REPO_TOKEN}@github.com/${BACKUP_REPO}.git" backup
+          mkdir -p "backup/$(date -u +%Y)"
+          mv backup-*.age "backup/$(date -u +%Y)/"
+          cd backup
+          git config user.name "backup-bot"
+          git config user.email "backup-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "weekly backup ${STAMP}"
+          git push

@@ -6,9 +6,13 @@ v3.0 零 LLM:核心輸出契約、卡、合成 trace 模型全數移除;
 
 from __future__ import annotations
 
+import datetime as _dt
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
+# 「當日/季/年」一律錨臺北(+8 固定無 DST):record_id 取號與報告期界共用
+TZ_TAIPEI = _dt.timezone(_dt.timedelta(hours=8))
 
 # ── 錯誤碼(spec v3.0:違序 / 缺軸 / 連結) ────────────────────────
 
@@ -30,6 +34,7 @@ class PRError(Exception):
 
 Mode = Literal["live", "rehearsal"]
 MODES: tuple[str, ...] = ("live", "rehearsal", "retro")  # retro = 事後覆盤(v3.2 B 件)
+CAREGIVERS: tuple[str, ...] = ("爸", "媽")  # v3.2 K 件:caregiver 受控詞(由 sub 映射,不收輸入)
 
 AgeBand = Literal["2-3", "4-6", "7-11", "12+"]  # 0-2 刻意範圍外(C3)
 AGE_BANDS: tuple[str, ...] = ("2-3", "4-6", "7-11", "12+")
