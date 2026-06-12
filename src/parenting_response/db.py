@@ -32,8 +32,8 @@ SESSION_COLUMNS: tuple[str, ...] = (
     "session_id", "child_id", "mode", "status", "stage", "age_band", "facts", "emotion",
     "emotion_intensity", "safety_flag", "severity", "is_positive_log",
     "problem_category", "confounders", "parent_goal", "goal_aligned", "linked_plan_id",
-    # v3.2:A 件 G0 訊號(旗標+風險向)/ B 件 retro 暫存 / C 件 TTL 續期錨
-    "redflag_active", "redflag_vector", "parent_action", "updated_at",
+    # v3.2:A 件 G0 訊號(旗標+風險向)/ B 件 retro 暫存 / C 件 TTL 續期錨 / K 件照顧者
+    "redflag_active", "redflag_vector", "parent_action", "updated_at", "caregiver",
 )
 
 RECORD_COLUMNS: tuple[str, ...] = (
@@ -154,7 +154,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     linked_plan_id    TEXT,
     redflag_active    BOOLEAN NOT NULL DEFAULT false,
     redflag_vector    TEXT,
-    parent_action     TEXT
+    parent_action     TEXT,
+    caregiver         TEXT NOT NULL DEFAULT '爸'
 );
 
 CREATE TABLE IF NOT EXISTS rounds (
@@ -223,6 +224,12 @@ ALTER TABLE sessions ALTER COLUMN updated_at SET NOT NULL;
 ALTER TABLE records ADD COLUMN IF NOT EXISTS redflag BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE records ADD COLUMN IF NOT EXISTS parent_action TEXT;
 ALTER TABLE records ALTER COLUMN schema_version SET DEFAULT 3;
+"""
+
+# v3.2 0008(K 件):caregiver 由已驗 sub 映射(CAREGIVER_MAP),不收輸入參數;
+# 既有列回填 DEFAULT '爸'(單人時期的事實)。
+DDL_MIGRATE_0008 = """
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS caregiver TEXT NOT NULL DEFAULT '爸';
 """
 
 
@@ -476,6 +483,7 @@ class PgDatabase:
             await conn.execute(DDL_MIGRATE)       # 既有 v2.2 庫直接開機也補齊 v3.0 欄位
             await conn.execute(DDL_MIGRATE_0004)  # 既有 v3.0 庫補齊 v3.2 欄位(冪等)
             await conn.execute(DDL_MIGRATE_0006)  # events.session_id 放寬可空(冪等)
+            await conn.execute(DDL_MIGRATE_0008)  # sessions.caregiver(冪等)
 
     @staticmethod
     def _jsonb(value: Any) -> Any:

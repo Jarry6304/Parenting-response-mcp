@@ -34,6 +34,7 @@ class PRError(Exception):
 
 Mode = Literal["live", "rehearsal"]
 MODES: tuple[str, ...] = ("live", "rehearsal", "retro")  # retro = 事後覆盤(v3.2 B 件)
+CAREGIVERS: tuple[str, ...] = ("爸", "媽")  # v3.2 K 件:caregiver 受控詞(由 sub 映射,不收輸入)
 
 AgeBand = Literal["2-3", "4-6", "7-11", "12+"]  # 0-2 刻意範圍外(C3)
 AGE_BANDS: tuple[str, ...] = ("2-3", "4-6", "7-11", "12+")

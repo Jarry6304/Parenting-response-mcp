@@ -25,6 +25,7 @@ from .db import Database, UniqueViolation, dump_json
 from .redflag import check_shortcircuit, check_warning
 from .schema import (
     AGE_BANDS,
+    CAREGIVERS,
     CHILD_REACTIONS,
     E_INVALID_LINK,
     E_INVALID_STATE,
@@ -74,10 +75,27 @@ _TZ_TAIPEI = TZ_TAIPEI  # 別名保留(record_id 當日錨;單一來源 = schema
 
 
 class Orchestrator:
-    def __init__(self, db: Database, *, session_ttl_days: int = 30) -> None:
+    def __init__(self, db: Database, *, session_ttl_days: int = 30,
+                 caregiver_map: dict[str, str] | None = None) -> None:
         self.db = db
         self.session_ttl_days = session_ttl_days  # ≤0 = 停用棄案清掃
+        # v3.2 K 件:sub → caregiver(爸|媽)。身分來自已驗 token,不收輸入參數
+        # (誰登入就是誰,host/家長皆不可代填)。local 模式(無 sub)= 預設「爸」。
+        self.caregiver_map = caregiver_map or {}
         # 注意:無 self.llm —— v3 零推論,刻意不收 LLM client
+
+    async def _resolve_caregiver(self) -> str:
+        """已驗 sub → caregiver;authkit 模式 sub 未映射 → E_INVALID_STATE + 稽核
+        (部署後新增帳號卻忘了配 CAREGIVER_MAP,要炸在第一步,不要默記錯人)。"""
+        sub = current_sub()
+        if sub is None:
+            return CAREGIVERS[0]  # local 模式單人:預設「爸」
+        caregiver = self.caregiver_map.get(sub)
+        if caregiver not in CAREGIVERS:
+            await self._log_event(None, "caregiver_unmapped", {"sub": sub})
+            raise PRError(E_INVALID_STATE,
+                          f"sub={sub} 未映射 caregiver(CAREGIVER_MAP 未配置此帳號)")
+        return caregiver
 
     async def _log_event(self, session_id: str | None, kind: str,
                          payload: dict[str, Any]) -> None:
@@ -122,6 +140,7 @@ class Orchestrator:
 
         session_id = uuid.uuid4().hex
         labeled = (("facts", facts), ("emotion", emotion))
+        caregiver = await self._resolve_caregiver()  # K 件:身分由 token 定,先驗再建案
 
         # G0(v3.2 A 件:訊號,不停案)——短路命中照常建案,旗標+severity=高,
         # FSM 照常推進;強制力由輸出匣承接(③ safety 卡、④ referral_ack)。
@@ -134,6 +153,7 @@ class Orchestrator:
             linked_plan_id=linked_plan_id,
             redflag_active=rf is not None,
             redflag_vector=rf.vector if rf is not None else None,
+            caregiver=caregiver,
         ))
         if rf is not None or warning_hits:
             await self._log_g0(session_id, "①", rf=rf, warnings=warning_hits)
@@ -882,8 +902,10 @@ class Orchestrator:
     @staticmethod
     def _row(session_id: str, child_id: str, mode: str, facts: str, emotion: str,
              *, stage: str, status: str, severity: str, linked_plan_id: str | None,
-             redflag_active: bool = False, redflag_vector: str | None = None) -> dict[str, Any]:
+             redflag_active: bool = False, redflag_vector: str | None = None,
+             caregiver: str = "爸") -> dict[str, Any]:
         return {"session_id": session_id, "child_id": child_id, "mode": mode,
                 "stage": stage, "status": status, "facts": facts, "emotion": emotion,
                 "severity": severity, "linked_plan_id": linked_plan_id,
-                "redflag_active": redflag_active, "redflag_vector": redflag_vector}
+                "redflag_active": redflag_active, "redflag_vector": redflag_vector,
+                "caregiver": caregiver}

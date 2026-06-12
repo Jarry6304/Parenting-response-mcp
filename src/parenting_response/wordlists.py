@@ -67,19 +67,31 @@ SEMANTIC_EVAL_TERMS: tuple[str, ...] = (
 SEMANTIC_NEG_PREFIX_RE = re.compile(r"不是|並非|沒有|不再|不會|很少")
 _CLAUSE_SPLIT_RE = re.compile(r"[,。;!?\n,;!?]")
 
+# v3.2 K 件:照顧者比較 tripwire(報告 slot)——「爸爸比媽媽會帶」這類句子
+# 把教養寫成排名,進 tripwire(警告不拒收;同 H 件回放)。
+CAREGIVER_COMPARE_RE = re.compile(
+    r"(?:爸爸?|媽媽?)(?:比|不如|沒有|贏過|輸給)(?:爸爸?|媽媽?)")
+
 
 def semantic_warnings(text: str) -> list[dict[str, str]]:
     """語意 tripwire:回 [{clause, term}](空 = 乾淨)。子句粒度判定,
-    否定前綴(「他不是故意的」)豁免。"""
+    否定前綴(「他不是故意的」)豁免;照顧者比較句(K 件)一併警示。"""
     hits: list[dict[str, str]] = []
     for clause in _CLAUSE_SPLIT_RE.split(text):
-        if not clause.strip() or not SEMANTIC_SUBJECT_RE.search(clause):
+        stripped = clause.strip()
+        if not stripped:
             continue
-        if SEMANTIC_NEG_PREFIX_RE.search(clause):
+        m = CAREGIVER_COMPARE_RE.search(stripped)
+        if m is not None:  # 教養不是排名:比較句不豁免否定前綴
+            hits.append({"clause": stripped, "term": m.group(0)})
+            continue
+        if not SEMANTIC_SUBJECT_RE.search(stripped):
+            continue
+        if SEMANTIC_NEG_PREFIX_RE.search(stripped):
             continue
         for term in SEMANTIC_EVAL_TERMS:
-            if term in clause:
-                hits.append({"clause": clause.strip(), "term": term})
+            if term in stripped:
+                hits.append({"clause": stripped, "term": term})
                 break
     return hits
 

@@ -57,6 +57,8 @@ def aggregate_period(
         "records_total": len(records),
         "outcome_dist": dict(Counter(str(r["outcome"]) for r in records)),
         "mode_dist": dict(Counter(str(s["mode"]) for s in sessions)),
+        # K 件:各照顧者「自照」案量(中性計數;報告不產對比節,比較句進 tripwire)
+        "caregiver_dist": dict(Counter(str(s.get("caregiver") or "爸") for s in sessions)),
         "severity_dist": dict(Counter(str(s.get("severity") or "低") for s in sessions)),
         "redflag_count": sum(1 for s in sessions if s.get("redflag_active")),
         "positive_log_count": sum(1 for s in sessions if s.get("is_positive_log")),
@@ -117,6 +119,7 @@ def render_period_stats(agg: dict[str, Any], label: str) -> str:
         f"{label}案量:{agg['sessions_total']}(完成 {agg['records_total']})",
         f"結果分布:{dist(agg['outcome_dist'])}",
         f"模式分布:{dist(agg['mode_dist'])}",
+        f"照顧紀錄:{dist(agg['caregiver_dist'])}",
         f"正向紀錄:{agg['positive_log_count']}",
         f"乒乓案 {agg['pingpong_count']} 件,其中收斂 {agg['converged_count']} 件"
         f"(平均 {agg['rounds_avg']} 輪)",

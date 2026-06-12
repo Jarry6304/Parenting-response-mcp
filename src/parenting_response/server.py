@@ -202,6 +202,10 @@ def main() -> None:
     ttl_days = int(os.environ.get("SESSION_TTL_DAYS", "30"))  # ≤0 = 停用棄案清掃
     validate_binding(mode, host)  # local + 非 loopback → 拒啟動(個資面)
 
+    import json
+
+    caregiver_map: dict[str, str] = json.loads(os.environ.get("CAREGIVER_MAP", "{}"))
+
     async def _run() -> None:
         db = PgDatabase(dsn, envelope=envelope)
         await db.open()
@@ -214,7 +218,8 @@ def main() -> None:
                               os.environ.get("ALLOWED_SUBJECTS", "").split(",") if s.strip()],
             db=db,
         )
-        orch = Orchestrator(db, session_ttl_days=ttl_days)  # 注意:不傳 llm —— v3 零推論
+        orch = Orchestrator(db, session_ttl_days=ttl_days,
+                            caregiver_map=caregiver_map)  # 注意:不傳 llm —— v3 零推論
         server = build_server(orch, auth=auth)
         await server.run_async(transport="streamable-http", host=host, port=port)
 

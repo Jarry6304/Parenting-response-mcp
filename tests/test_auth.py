@@ -76,12 +76,17 @@ async def test_allowlist_verifier_gates_and_audits(db: MemoryDatabase) -> None:
 
 
 async def test_events_carry_sub_when_authed(
-    client: Client, db: MemoryDatabase, monkeypatch: pytest.MonkeyPatch,
+    db: MemoryDatabase, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """authkit 請求上下文下,G0 稽核 events 自動附 sub(誰觸發可考)。"""
+    from parenting_response.orchestrator import Orchestrator
+    from parenting_response.server import build_server
+
     monkeypatch.setattr("parenting_response.orchestrator.current_sub", lambda: "user_dad")
-    r = data_of(await client.call_tool("constraints", constraints_args(
-        facts="他說他不想活了", emotion="害怕")))
+    orch = Orchestrator(db, caregiver_map={"user_dad": "爸"})
+    async with Client(build_server(orch)) as c:
+        r = data_of(await c.call_tool("constraints", constraints_args(
+            facts="他說他不想活了", emotion="害怕")))
     evs = await db.get_events(r["session_id"])
     assert evs[0]["kind"] == "g0_shortcircuit" and evs[0]["payload"]["sub"] == "user_dad"
 
